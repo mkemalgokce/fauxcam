@@ -37,6 +37,12 @@ static BOOL fauxIsVideoMediaType(NSString *mediaType) {
     return [mediaType isEqualToString:kVideoMediaTypeCode] || [mediaType isEqualToString:AVMediaTypeVideo];
 }
 
+BOOL FauxIsFakeDevice(id device) {
+    if (!device) return NO;
+    NSString *uniqueID = objc_getAssociatedObject(device, kFauxUniqueIDKey);
+    return [uniqueID isEqualToString:kFauxBackUniqueID] || [uniqueID isEqualToString:kFauxFrontUniqueID];
+}
+
 // MARK: - Fake device getters
 
 static NSInteger fauxPositionForDevice(id device) {

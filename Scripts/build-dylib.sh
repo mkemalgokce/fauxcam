@@ -27,6 +27,7 @@ for ARCH in "${ARCHITECTURES[@]}"; do
         -install_name "@rpath/libFaux.dylib" \
         -framework Foundation \
         -framework CoreMedia \
+        -framework CoreVideo \
         -framework AVFoundation \
         -o "$SLICE" \
         "${SOURCES[@]}"
