@@ -2,6 +2,7 @@
 #import <dispatch/dispatch.h>
 #import <unistd.h>
 #include "../Shared/faux_wire.h"
+#include "AVSwizzle.h"
 
 static os_log_t faux_guest_log(void) {
     static os_log_t log;
@@ -13,4 +14,5 @@ static os_log_t faux_guest_log(void) {
 __attribute__((constructor))
 static void faux_guest_bootstrap(void) {
     os_log(faux_guest_log(), "FauxCam guest alive pid=%d (wire v%d)", getpid(), FAUX_PROTO_VERSION);
+    FauxInstallCameraDiscovery();
 }

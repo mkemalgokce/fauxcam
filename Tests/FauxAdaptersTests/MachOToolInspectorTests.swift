@@ -8,7 +8,6 @@ private enum Repo {
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     static var buildScript: URL { root.appendingPathComponent("Scripts/build-dylib.sh") }
     static var dylib: URL { root.appendingPathComponent("dist/libFaux.dylib") }
-    static var guestSource: URL { root.appendingPathComponent("Guest/Bootstrap.m") }
 }
 
 @discardableResult
@@ -50,6 +49,10 @@ private func captureOutput(_ launchPath: String, _ arguments: [String]) -> Strin
     try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: workDirectory) }
 
+    let trivialSource = workDirectory.appendingPathComponent("trivial.m")
+    try "__attribute__((constructor)) static void fauxTestProbe(void) {}\n"
+        .write(to: trivialSource, atomically: true, encoding: .utf8)
+
     let sdkPath = captureOutput("/usr/bin/xcrun", ["--sdk", "iphonesimulator", "--show-sdk-path"])
     var slices: [String] = []
     for architecture in DylibAudit.requiredArchitectures {
@@ -60,7 +63,7 @@ private func captureOutput(_ launchPath: String, _ arguments: [String]) -> Strin
             "-target", "\(architecture)-apple-ios15.0-simulator",
             "-fobjc-arc", "-install_name", "@rpath/libFaux.dylib",
             "-framework", "Foundation",
-            "-o", slice, Repo.guestSource.path
+            "-o", slice, trivialSource.path
         ])
         #expect(status == 0)
         slices.append(slice)

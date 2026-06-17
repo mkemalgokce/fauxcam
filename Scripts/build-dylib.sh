@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$ROOT/Guest/Bootstrap.m"
+SOURCES=("$ROOT"/Guest/*.m)
 OUTPUT_DIR="$ROOT/dist"
 OUTPUT="$OUTPUT_DIR/libFaux.dylib"
 DEPLOYMENT_TARGET="15.0"
@@ -23,10 +23,13 @@ for ARCH in "${ARCHITECTURES[@]}"; do
         -isysroot "$SDK_PATH" \
         -target "$ARCH-apple-ios$DEPLOYMENT_TARGET-simulator" \
         -fobjc-arc \
+        -fmodules \
         -install_name "@rpath/libFaux.dylib" \
         -framework Foundation \
+        -framework CoreMedia \
+        -framework AVFoundation \
         -o "$SLICE" \
-        "$SOURCE"
+        "${SOURCES[@]}"
     SLICES+=("$SLICE")
 done
 

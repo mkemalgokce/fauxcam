@@ -74,8 +74,8 @@ enum RepositoryLayout {
     static var fixtureBundle: URL { root.appendingPathComponent("Fixture/FauxFixture.app") }
 }
 
-@Suite("Phase 0 loader spike", .serialized)
-struct Phase0LoaderSpike {
+@Suite("FauxCam integration", .serialized)
+struct FauxCamIntegration {
 
 @Suite("build, Mach-O, signature, doctor")
 struct BuildAndDoctorSmoke {
@@ -255,6 +255,91 @@ struct LiveInjectionSmoke {
         #expect(build.succeeded, Comment(rawValue: build.combinedOutput))
         let install = Shell.xcrun(["simctl", "install", deviceIdentifier, RepositoryLayout.fixtureBundle.path])
         #expect(install.succeeded, Comment(rawValue: install.combinedOutput))
+    }
+}
+
+// MARK: - Phase 1: fake camera discovery
+
+@Suite("Phase 1: fake camera discovery", .enabled(if: BootedSimulatorGate.isSatisfied, Comment(rawValue: BootedSimulatorGate.skipReason)))
+struct DiscoverySmoke {
+    private static let fixtureBundleIdentifier =
+        ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
+    private static let injectedProbeNeedle = "probe discovered=2 back=1 front=1 authorized=1"
+    private static let baselineProbeNeedle = "probe discovered=0"
+    private static let anyProbeNeedle = "probe discovered="
+    private static let guestLogSubsystem = "com.fauxcam"
+    private static let deadlineSeconds: TimeInterval = 20
+    private static let logStreamWarmupSeconds: TimeInterval = 2
+    private static let pollIntervalSeconds: TimeInterval = 0.25
+
+    @Test("injected swizzle makes one front + one back fake camera appear in discovery")
+    func injectionVendsFrontAndBackCameras() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        buildAndInstall(onto: deviceIdentifier)
+        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: RepositoryLayout.distributedDylib.path)
+        #expect(captured.contains(Self.injectedProbeNeedle), Comment(rawValue: "expected \(Self.injectedProbeNeedle); captured:\n\(captured)"))
+    }
+
+    @Test("without injection the simulator reports zero cameras")
+    func baselineReportsNoCameras() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        buildAndInstall(onto: deviceIdentifier)
+        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: nil)
+        #expect(captured.contains(Self.baselineProbeNeedle), Comment(rawValue: "expected \(Self.baselineProbeNeedle); captured:\n\(captured)"))
+    }
+
+    private func buildAndInstall(onto deviceIdentifier: String) {
+        let dylibBuild = Shell.runCapturing(
+            executablePath: "/bin/bash",
+            arguments: [RepositoryLayout.buildDylibScript.path],
+            currentDirectory: RepositoryLayout.root
+        )
+        #expect(dylibBuild.succeeded, Comment(rawValue: dylibBuild.combinedOutput))
+        let fixtureBuild = Shell.runCapturing(
+            executablePath: "/bin/bash",
+            arguments: [RepositoryLayout.buildFixtureScript.path],
+            currentDirectory: RepositoryLayout.root
+        )
+        #expect(fixtureBuild.succeeded, Comment(rawValue: fixtureBuild.combinedOutput))
+        let install = Shell.xcrun(["simctl", "install", deviceIdentifier, RepositoryLayout.fixtureBundle.path])
+        #expect(install.succeeded, Comment(rawValue: install.combinedOutput))
+    }
+
+    private func launchAndCapture(deviceIdentifier: String, injectingDylib dylibPath: String?) -> String {
+        let logStreamProcess = Process()
+        let logStreamOutput = Pipe()
+        let capturedLog = ConcurrentDataBuffer()
+        logStreamProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        logStreamProcess.arguments = [
+            "simctl", "spawn", deviceIdentifier, "log", "stream",
+            "--style", "compact",
+            "--predicate", "subsystem == \"\(Self.guestLogSubsystem)\" AND category == \"probe\""
+        ]
+        logStreamProcess.standardOutput = logStreamOutput
+        logStreamProcess.standardError = Pipe()
+        logStreamOutput.fileHandleForReading.readabilityHandler = { capturedLog.append($0.availableData) }
+        try? logStreamProcess.run()
+        defer {
+            logStreamOutput.fileHandleForReading.readabilityHandler = nil
+            if logStreamProcess.isRunning { logStreamProcess.terminate() }
+            _ = Shell.xcrun(["simctl", "terminate", deviceIdentifier, Self.fixtureBundleIdentifier])
+        }
+        Thread.sleep(forTimeInterval: Self.logStreamWarmupSeconds)
+
+        var environment = ProcessInfo.processInfo.environment
+        if let dylibPath { environment["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = dylibPath }
+        _ = Shell.runCapturing(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["simctl", "launch", "--terminate-running-process", deviceIdentifier, Self.fixtureBundleIdentifier],
+            environment: environment
+        )
+
+        let deadline = Date().addingTimeInterval(Self.deadlineSeconds)
+        while Date() < deadline {
+            if String(decoding: capturedLog.contents, as: UTF8.self).contains(Self.anyProbeNeedle) { break }
+            Thread.sleep(forTimeInterval: Self.pollIntervalSeconds)
+        }
+        return String(decoding: capturedLog.contents, as: UTF8.self)
     }
 }
 
