@@ -4,6 +4,9 @@ LIB="${1:-dist/libFaux.dylib}"
 
 echo "== lipo -info (expect: contains x86_64 arm64) =="
 lipo -info "$LIB"
+for REQUIRED_ARCH in arm64 x86_64; do
+    lipo -info "$LIB" | grep -qw "$REQUIRED_ARCH" || { echo "FAIL: missing $REQUIRED_ARCH slice"; exit 1; }
+done
 
 for ARCH in arm64 x86_64; do
     echo "== $ARCH LC_BUILD_VERSION (expect platform 7) =="
