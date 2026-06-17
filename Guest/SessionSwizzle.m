@@ -1,0 +1,232 @@
+#include "SessionSwizzle.h"
+#include "AVSwizzle.h"
+#import "FauxBufferFactory.h"
+
+@import Foundation;
+@import ObjectiveC.runtime;
+@import ObjectiveC.message;
+@import os.log;
+@import AVFoundation;
+@import CoreMedia;
+
+static const int32_t kFrameWidth = 1280;
+static const int32_t kFrameHeight = 720;
+static const int32_t kFramesPerSecond = 10;
+static const uint8_t kSourcePixelBlue = 255;
+static const uint8_t kSourcePixelGreen = 0;
+static const uint8_t kSourcePixelRed = 255;
+static const uint8_t kSourcePixelAlpha = 255;
+
+static const void *kSessionPumpKey = &kSessionPumpKey;
+static const void *kFakeInputDeviceKey = &kFakeInputDeviceKey;
+static const void *kOutputDelegateKey = &kOutputDelegateKey;
+static const void *kOutputQueueKey = &kOutputQueueKey;
+
+static IMP fauxNSObjectInit;
+static IMP fauxOriginalInputInit;
+static IMP fauxOriginalAddInput;
+static IMP fauxOriginalAddOutput;
+
+static os_log_t fauxSessionLog(void) {
+    static os_log_t log;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ log = os_log_create("com.fauxcam", "session"); });
+    return log;
+}
+
+// MARK: - Frame pump
+
+@interface FauxFramePump : NSObject
+@property (nonatomic, weak) id sampleBufferDelegate;
+@property (nonatomic, strong) dispatch_queue_t deliveryQueue;
+@property (nonatomic, strong) id captureOutput;
+@property (nonatomic, strong) id captureConnection;
+- (void)start;
+- (void)stop;
+@end
+
+@implementation FauxFramePump {
+    dispatch_source_t _timer;
+    FauxBufferFactory *_bufferFactory;
+    uint8_t *_sourcePixels;
+    size_t _sourceBytesPerRow;
+    uint32_t _sequence;
+}
+
+- (void)start {
+    if (_timer) return;
+    id delegate = self.sampleBufferDelegate;
+    if (!delegate || !self.deliveryQueue) {
+        os_log_error(fauxSessionLog(), "frame pump missing delegate or queue");
+        return;
+    }
+    _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:kFrameWidth height:kFrameHeight framesPerSecond:kFramesPerSecond];
+    if (!_bufferFactory) return;
+    [self buildSourcePixels];
+
+    _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.deliveryQueue);
+    uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)kFramesPerSecond;
+    dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), interval, interval / 10);
+    __weak FauxFramePump *weakSelf = self;
+    dispatch_source_set_event_handler(_timer, ^{ [weakSelf deliverFrame]; });
+    dispatch_resume(_timer);
+    os_log(fauxSessionLog(), "frame pump started fps=%d", kFramesPerSecond);
+}
+
+- (void)stop {
+    if (_timer) {
+        dispatch_source_cancel(_timer);
+        _timer = nil;
+    }
+}
+
+- (void)buildSourcePixels {
+    _sourceBytesPerRow = (size_t)kFrameWidth * 4;
+    size_t total = _sourceBytesPerRow * (size_t)kFrameHeight;
+    _sourcePixels = malloc(total);
+    if (!_sourcePixels) return;
+    for (size_t offset = 0; offset < total; offset += 4) {
+        _sourcePixels[offset] = kSourcePixelBlue;
+        _sourcePixels[offset + 1] = kSourcePixelGreen;
+        _sourcePixels[offset + 2] = kSourcePixelRed;
+        _sourcePixels[offset + 3] = kSourcePixelAlpha;
+    }
+}
+
+- (void)deliverFrame {
+    id delegate = self.sampleBufferDelegate;
+    if (!delegate || !_sourcePixels) return;
+    CMSampleBufferRef sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:_sourcePixels sourceBytesPerRow:_sourceBytesPerRow];
+    if (!sampleBuffer) return;
+    _sequence++;
+    ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
+        delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
+        self.captureOutput, sampleBuffer, self.captureConnection);
+    CFRelease(sampleBuffer);
+}
+
+- (void)dealloc {
+    [self stop];
+    if (_sourcePixels) free(_sourcePixels);
+}
+
+@end
+
+// MARK: - Pump lookup
+
+static id fauxMakeConnection(void) {
+    Class connectionClass = objc_getClass("AVCaptureConnection");
+    return connectionClass ? class_createInstance(connectionClass, 0) : nil;
+}
+
+static FauxFramePump *fauxPumpForSession(id session) {
+    FauxFramePump *pump = objc_getAssociatedObject(session, kSessionPumpKey);
+    if (!pump) {
+        pump = [[FauxFramePump alloc] init];
+        pump.captureConnection = fauxMakeConnection();
+        objc_setAssociatedObject(session, kSessionPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return pump;
+}
+
+// MARK: - Swizzled implementations
+
+static id fauxInputInitWithDevice(id self, SEL _cmd, id device, NSError **error) {
+    if (FauxIsFakeDevice(device)) {
+        id initialized = ((id (*)(id, SEL))fauxNSObjectInit)(self, @selector(init));
+        if (initialized) {
+            objc_setAssociatedObject(initialized, kFakeInputDeviceKey, device, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (error) *error = nil;
+        return initialized;
+    }
+    if (fauxOriginalInputInit) {
+        return ((id (*)(id, SEL, id, NSError **))fauxOriginalInputInit)(self, _cmd, device, error);
+    }
+    return nil;
+}
+
+static void fauxSetSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
+    objc_setAssociatedObject(self, kOutputDelegateKey, delegate, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(self, kOutputQueueKey, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL fauxInputIsFake(id input) {
+    return objc_getAssociatedObject(input, kFakeInputDeviceKey) != nil;
+}
+
+static void fauxSessionAddInput(id self, SEL _cmd, id input) {
+    if (fauxInputIsFake(input)) {
+        (void)fauxPumpForSession(self);
+        return;
+    }
+    if (fauxOriginalAddInput) {
+        ((void (*)(id, SEL, id))fauxOriginalAddInput)(self, _cmd, input);
+    }
+}
+
+static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
+    if ([output isKindOfClass:objc_getClass("AVCaptureVideoDataOutput")]) {
+        FauxFramePump *pump = fauxPumpForSession(self);
+        pump.captureOutput = output;
+        pump.sampleBufferDelegate = objc_getAssociatedObject(output, kOutputDelegateKey);
+        pump.deliveryQueue = objc_getAssociatedObject(output, kOutputQueueKey);
+        return;
+    }
+    if (fauxOriginalAddOutput) {
+        ((void (*)(id, SEL, id))fauxOriginalAddOutput)(self, _cmd, output);
+    }
+}
+
+static void fauxSessionStartRunning(id self, SEL _cmd) {
+    os_log(fauxSessionLog(), "startRunning intercepted (faux graph)");
+    FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
+    if (pump) [pump start];
+}
+
+static void fauxSessionStopRunning(id self, SEL _cmd) {
+    FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
+    if (pump) [pump stop];
+}
+
+static BOOL fauxSessionCanAddInput(id self, SEL _cmd, id input) { return YES; }
+static BOOL fauxSessionCanAddOutput(id self, SEL _cmd, id output) { return YES; }
+
+// MARK: - Installation
+
+static IMP fauxReplaceInstanceMethod(Class targetClass, SEL selector, IMP implementation, const char *fallbackTypes) {
+    Method existing = class_getInstanceMethod(targetClass, selector);
+    const char *types = existing ? method_getTypeEncoding(existing) : fallbackTypes;
+    IMP original = existing ? method_getImplementation(existing) : NULL;
+    if (!class_addMethod(targetClass, selector, implementation, types)) {
+        original = method_setImplementation(class_getInstanceMethod(targetClass, selector), implementation);
+    }
+    return original;
+}
+
+void FauxInstallCaptureSession(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Method nsObjectInit = class_getInstanceMethod([NSObject class], @selector(init));
+        fauxNSObjectInit = method_getImplementation(nsObjectInit);
+
+        Class inputClass = objc_getClass("AVCaptureDeviceInput");
+        if (inputClass) {
+            fauxOriginalInputInit = fauxReplaceInstanceMethod(inputClass, @selector(initWithDevice:error:), (IMP)fauxInputInitWithDevice, "@@:@^@");
+        }
+        Class outputClass = objc_getClass("AVCaptureVideoDataOutput");
+        if (outputClass) {
+            fauxReplaceInstanceMethod(outputClass, @selector(setSampleBufferDelegate:queue:), (IMP)fauxSetSampleBufferDelegate, "v@:@@");
+        }
+        Class sessionClass = objc_getClass("AVCaptureSession");
+        if (sessionClass) {
+            fauxOriginalAddInput = fauxReplaceInstanceMethod(sessionClass, @selector(addInput:), (IMP)fauxSessionAddInput, "v@:@");
+            fauxOriginalAddOutput = fauxReplaceInstanceMethod(sessionClass, @selector(addOutput:), (IMP)fauxSessionAddOutput, "v@:@");
+            fauxReplaceInstanceMethod(sessionClass, @selector(startRunning), (IMP)fauxSessionStartRunning, "v@:");
+            fauxReplaceInstanceMethod(sessionClass, @selector(stopRunning), (IMP)fauxSessionStopRunning, "v@:");
+            fauxReplaceInstanceMethod(sessionClass, @selector(canAddInput:), (IMP)fauxSessionCanAddInput, "B@:@");
+            fauxReplaceInstanceMethod(sessionClass, @selector(canAddOutput:), (IMP)fauxSessionCanAddOutput, "B@:@");
+        }
+        os_log(fauxSessionLog(), "capture session interception installed");
+    });
+}
