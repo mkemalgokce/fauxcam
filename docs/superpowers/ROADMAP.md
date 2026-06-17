@@ -18,8 +18,8 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 | # | Phase | Scope | Status |
 |---|-------|-------|--------|
 | 0 | Loader spike | guest dylib + faux doctor + fixture + live-injection proof | ✅ DONE (merged 3fa017d) |
-| 1 | Fake discovery | AVSwizzle vends fake front/back `AVCaptureDevice`; `AVCaptureDeviceDiscoverySession`/`default`/`devices` return them; authorization → Authorized. No frames. | ▶ IN PROGRESS |
-| 2 | Static frame E2E | `faux_wire.h` framing + `UnixSocketTransport` + `FrameServer` (host) + `FrameClient` + `BufferFactory` (guest): a `CMSampleBuffer` from a host-pushed BGRA image reaches `captureOutput:didOutputSampleBuffer:`; preview layer shows it. | ⬜ TODO |
+| 1 | Fake discovery | AVSwizzle vends fake front/back `AVCaptureDevice`; `AVCaptureDeviceDiscoverySession`/`default`/`devices` return them; authorization → Authorized. No frames. | ✅ DONE (merged b5671ae; 16 tests, live discovery proven) |
+| 2 | Static frame E2E | `faux_wire.h` framing + `UnixSocketTransport` + `FrameServer` (host) + `FrameClient` + `BufferFactory` (guest): a `CMSampleBuffer` from a host-pushed BGRA image reaches `captureOutput:didOutputSampleBuffer:`; preview layer shows it. | ▶ IN PROGRESS |
 | 3 | Multi-source | host `AVAssetVideoSource` (video file) + `AVCaptureWebcamSource` (Mac camera/Continuity); front + back streams. | ⬜ TODO |
 | 4 | Host UX | `SimWatcher` (CoreSimulator notify) + SwiftUI menubar app + `faux` CLI (`run`/`list`/`doctor`). | ⬜ TODO |
 | 5 | QR + polish | host `CoreImageQRSource` + guest `AVCaptureMetadataOutput` hook; docs, notarization, README. | ⬜ TODO |
