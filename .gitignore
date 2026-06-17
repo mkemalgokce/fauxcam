@@ -16,3 +16,7 @@ xcuserdata/
 # FauxCam build artifacts
 dist/
 *.dylib
+
+Fixture/FauxFixture.app/
+Fixture/build/
+.build-faux/
