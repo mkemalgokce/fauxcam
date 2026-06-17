@@ -6,7 +6,9 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "FauxDomain"),
+        .target(name: "FauxApplication", dependencies: ["FauxDomain"]),
         .testTarget(name: "FauxDomainTests", dependencies: ["FauxDomain"]),
+        .testTarget(name: "FauxApplicationTests", dependencies: ["FauxApplication", "FauxDomain"]),
         .testTarget(name: "FauxLoaderIntegrationTests")
     ]
 )
