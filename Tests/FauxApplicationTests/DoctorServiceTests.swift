@@ -2,13 +2,25 @@ import Testing
 import FauxDomain
 @testable import FauxApplication
 
-private struct StubInspector: DylibInspecting {
+private final class RecordingInspector: DylibInspecting, @unchecked Sendable {
     let stubbed: DylibAudit
-    func audit(at path: String) throws -> DylibAudit { stubbed }
+    private(set) var receivedPath: String?
+
+    init(stubbed: DylibAudit) { self.stubbed = stubbed }
+
+    func audit(at path: String) throws -> DylibAudit {
+        receivedPath = path
+        return stubbed
+    }
 }
 
-@Test func doctorReturnsAuditFromInspector() throws {
+@Test func doctorForwardsPathAndReturnsInspectorAudit() throws {
     let expected = DylibAudit(isSimulatorPlatform: true, isAdHocSigned: true, architectures: ["arm64", "x86_64"])
-    let service = DoctorService(inspector: StubInspector(stubbed: expected))
-    #expect(try service.diagnose(dylibAt: "any/path") == expected)
+    let inspector = RecordingInspector(stubbed: expected)
+    let service = DoctorService(inspector: inspector)
+
+    let result = try service.diagnose(dylibAt: "some/path.dylib")
+
+    #expect(result == expected)
+    #expect(inspector.receivedPath == "some/path.dylib")
 }

@@ -102,9 +102,9 @@ struct BuildAndDoctorSmoke {
         let platforms = loadCommands.standardOutput
             .split(separator: "\n")
             .compactMap { line -> Int? in
-                let t = line.trimmingCharacters(in: .whitespaces)
-                guard t.hasPrefix("platform ") else { return nil }
-                return Int(t.dropFirst("platform ".count).trimmingCharacters(in: .whitespaces))
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                guard trimmedLine.hasPrefix("platform ") else { return nil }
+                return Int(trimmedLine.dropFirst("platform ".count).trimmingCharacters(in: .whitespaces))
             }
         #expect(platforms.count == Self.requiredArchitectures.count)
         #expect(platforms.allSatisfy { $0 == Self.expectedSimulatorPlatformIdentifier })
@@ -115,6 +115,13 @@ struct BuildAndDoctorSmoke {
 
     @Test("faux doctor verifies the dylib and reports PASS")
     func doctorReportsPass() throws {
+        let dylibBuild = Shell.runCapturing(
+            executablePath: "/bin/bash",
+            arguments: [RepositoryLayout.buildDylibScript.path],
+            currentDirectory: RepositoryLayout.root
+        )
+        #expect(dylibBuild.succeeded, Comment(rawValue: dylibBuild.combinedOutput))
+
         let built = Shell.xcrun(
             ["swift", "build", "--product", "faux", "--scratch-path", ".build-faux"],
             currentDirectory: RepositoryLayout.root
@@ -126,6 +133,21 @@ struct BuildAndDoctorSmoke {
         )
         #expect(doctor.succeeded, Comment(rawValue: doctor.combinedOutput))
         #expect(doctor.combinedOutput.contains("PASS"))
+    }
+
+    @Test("faux doctor returns inspection-error exit 2 for a missing dylib")
+    func doctorReportsInspectionErrorForMissingDylib() throws {
+        let built = Shell.xcrun(
+            ["swift", "build", "--product", "faux", "--scratch-path", ".build-faux"],
+            currentDirectory: RepositoryLayout.root
+        )
+        #expect(built.succeeded, Comment(rawValue: built.combinedOutput))
+        let doctor = Shell.runCapturing(
+            executablePath: RepositoryLayout.fauxExecutable.path,
+            arguments: ["doctor", "/nonexistent/path/to/libFaux.dylib"]
+        )
+        #expect(doctor.exitStatus == 2, Comment(rawValue: "expected exit 2, got \(doctor.exitStatus): \(doctor.combinedOutput)"))
+        #expect(doctor.combinedOutput.contains("could not inspect"))
     }
 }
 

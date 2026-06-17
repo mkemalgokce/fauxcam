@@ -1,4 +1,12 @@
+public enum LoadabilityRequirement: Sendable, Equatable {
+    case simulatorPlatform
+    case adHocSignature
+    case architecture(String)
+}
+
 public struct DylibAudit: Sendable, Equatable {
+    public static let requiredArchitectures = ["arm64", "x86_64"]
+
     public let isSimulatorPlatform: Bool
     public let isAdHocSigned: Bool
     public let architectures: [String]
@@ -9,10 +17,17 @@ public struct DylibAudit: Sendable, Equatable {
         self.architectures = architectures
     }
 
+    public var unmetRequirements: [LoadabilityRequirement] {
+        var unmet: [LoadabilityRequirement] = []
+        if !isSimulatorPlatform { unmet.append(.simulatorPlatform) }
+        if !isAdHocSigned { unmet.append(.adHocSignature) }
+        for architecture in Self.requiredArchitectures where !architectures.contains(architecture) {
+            unmet.append(.architecture(architecture))
+        }
+        return unmet
+    }
+
     public var isLoadable: Bool {
-        isSimulatorPlatform
-            && isAdHocSigned
-            && architectures.contains("arm64")
-            && architectures.contains("x86_64")
+        unmetRequirements.isEmpty
     }
 }

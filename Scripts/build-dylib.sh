@@ -11,10 +11,14 @@ ARCHITECTURES=(arm64 x86_64)
 SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 mkdir -p "$OUTPUT_DIR"
 
+STAGING="$OUTPUT_DIR/.staging.$$"
+mkdir -p "$STAGING"
+trap 'rm -rf "$STAGING"' EXIT
+
 SLICES=()
 for ARCH in "${ARCHITECTURES[@]}"; do
-    SLICE="$OUTPUT_DIR/libFaux-$ARCH.dylib"
-    clang -arch "$ARCH" \
+    SLICE="$STAGING/libFaux-$ARCH.dylib"
+    xcrun clang -arch "$ARCH" \
         -dynamiclib \
         -isysroot "$SDK_PATH" \
         -target "$ARCH-apple-ios$DEPLOYMENT_TARGET-simulator" \
@@ -26,10 +30,10 @@ for ARCH in "${ARCHITECTURES[@]}"; do
     SLICES+=("$SLICE")
 done
 
-lipo -create "${SLICES[@]}" -output "$OUTPUT"
-rm -f "${SLICES[@]}"
+STAGED_OUTPUT="$STAGING/libFaux.dylib"
+xcrun lipo -create "${SLICES[@]}" -output "$STAGED_OUTPUT"
+xcrun codesign --force --sign - --timestamp=none "$STAGED_OUTPUT"
+mv -f "$STAGED_OUTPUT" "$OUTPUT"
 
-codesign --force --sign - --timestamp=none "$OUTPUT"
-
+"$ROOT/Scripts/verify-dylib.sh" "$OUTPUT"
 echo "built $OUTPUT"
-lipo -info "$OUTPUT"
