@@ -266,7 +266,6 @@ struct DiscoverySmoke {
         ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
     private static let injectedProbeNeedle = "probe discovered=2 back=1 front=1 authorized=1"
     private static let baselineProbeNeedle = "probe discovered=0"
-    private static let anyProbeNeedle = "probe discovered="
     private static let guestLogSubsystem = "com.fauxcam"
     private static let deadlineSeconds: TimeInterval = 20
     private static let logStreamWarmupSeconds: TimeInterval = 2
@@ -276,7 +275,7 @@ struct DiscoverySmoke {
     func injectionVendsFrontAndBackCameras() throws {
         let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
         buildAndInstall(onto: deviceIdentifier)
-        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: RepositoryLayout.distributedDylib.path)
+        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: RepositoryLayout.distributedDylib.path, untilContains: Self.injectedProbeNeedle)
         #expect(captured.contains(Self.injectedProbeNeedle), Comment(rawValue: "expected \(Self.injectedProbeNeedle); captured:\n\(captured)"))
     }
 
@@ -284,8 +283,9 @@ struct DiscoverySmoke {
     func baselineReportsNoCameras() throws {
         let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
         buildAndInstall(onto: deviceIdentifier)
-        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: nil)
+        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: nil, untilContains: Self.baselineProbeNeedle)
         #expect(captured.contains(Self.baselineProbeNeedle), Comment(rawValue: "expected \(Self.baselineProbeNeedle); captured:\n\(captured)"))
+        #expect(!captured.contains(Self.injectedProbeNeedle), Comment(rawValue: "baseline must not see injected cameras; captured:\n\(captured)"))
     }
 
     private func buildAndInstall(onto deviceIdentifier: String) {
@@ -305,7 +305,7 @@ struct DiscoverySmoke {
         #expect(install.succeeded, Comment(rawValue: install.combinedOutput))
     }
 
-    private func launchAndCapture(deviceIdentifier: String, injectingDylib dylibPath: String?) -> String {
+    private func launchAndCapture(deviceIdentifier: String, injectingDylib dylibPath: String?, untilContains needle: String) -> String {
         let logStreamProcess = Process()
         let logStreamOutput = Pipe()
         let capturedLog = ConcurrentDataBuffer()
@@ -318,7 +318,9 @@ struct DiscoverySmoke {
         logStreamProcess.standardOutput = logStreamOutput
         logStreamProcess.standardError = Pipe()
         logStreamOutput.fileHandleForReading.readabilityHandler = { capturedLog.append($0.availableData) }
-        try? logStreamProcess.run()
+        do { try logStreamProcess.run() } catch {
+            return "failed to start log stream: \(error)"
+        }
         defer {
             logStreamOutput.fileHandleForReading.readabilityHandler = nil
             if logStreamProcess.isRunning { logStreamProcess.terminate() }
@@ -328,15 +330,16 @@ struct DiscoverySmoke {
 
         var environment = ProcessInfo.processInfo.environment
         if let dylibPath { environment["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = dylibPath }
-        _ = Shell.runCapturing(
+        let launch = Shell.runCapturing(
             executablePath: "/usr/bin/xcrun",
             arguments: ["simctl", "launch", "--terminate-running-process", deviceIdentifier, Self.fixtureBundleIdentifier],
             environment: environment
         )
+        #expect(launch.succeeded, Comment(rawValue: launch.combinedOutput))
 
         let deadline = Date().addingTimeInterval(Self.deadlineSeconds)
         while Date() < deadline {
-            if String(decoding: capturedLog.contents, as: UTF8.self).contains(Self.anyProbeNeedle) { break }
+            if String(decoding: capturedLog.contents, as: UTF8.self).contains(needle) { break }
             Thread.sleep(forTimeInterval: Self.pollIntervalSeconds)
         }
         return String(decoding: capturedLog.contents, as: UTF8.self)

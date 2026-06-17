@@ -29,6 +29,9 @@ private enum CameraDiscoveryProbe {
             mediaType: .video,
             position: .unspecified
         ).devices
+        for device in discovered {
+            _ = String(describing: device.activeFormat)
+        }
         let backCount = discovered.filter { $0.position == .back }.count
         let frontCount = discovered.filter { $0.position == .front }.count
         let authorized = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
