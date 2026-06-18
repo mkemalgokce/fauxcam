@@ -59,12 +59,12 @@ public final class FauxRunSession: @unchecked Sendable {
         self.fileExists = fileExists
     }
 
-    public func start(sourceSpec: String, device: SimDevice, bundleIdentifier: String, configuration: Configuration) throws {
+    public func start(descriptor: SourceDescriptor, device: SimDevice, bundleIdentifier: String, configuration: Configuration) throws {
         guard transport == nil else { throw StartError.alreadyRunning }
         guard fileExists(configuration.dylibPath) else { throw StartError.dylibMissing(configuration.dylibPath) }
 
         let transport = try UnixSocketTransport(listeningAt: configuration.socketPath)
-        let source = sourceFactory.make(sourceSpec, crop: { [cropBox] in cropBox.value })
+        let source = sourceFactory.make(descriptor, crop: { [cropBox] in cropBox.value })
         let coordinator = StreamCoordinator(source: source, transport: transport)
         let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
         serverThread.start()

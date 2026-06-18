@@ -28,7 +28,7 @@ private func runSession(_ arguments: RunArguments, _ device: SimDevice) throws {
         dylibPath: absoluteDylibPath(),
         socketPath: "/private/tmp/com.fauxcam/run-\(ProcessInfo.processInfo.processIdentifier).sock"
     )
-    try runner.start(sourceSpec: arguments.sourceSpec, device: device, bundleIdentifier: arguments.bundleIdentifier, configuration: configuration)
+    try runner.start(descriptor: SourceDescriptor.parse(arguments.sourceSpec), device: device, bundleIdentifier: arguments.bundleIdentifier, configuration: configuration)
     print("faux run: serving '\(arguments.sourceSpec)' to \(device.name) [\(arguments.bundleIdentifier)]. Press Ctrl-C to stop.")
     waitForInterrupt()
     runner.stop()
@@ -51,7 +51,7 @@ let command = FauxCommand(
     serverFactory: { socketPath, sourceSpec in
         FauxServer(
             coordinator: StreamCoordinator(
-                source: sourceFactory.make(sourceSpec),
+                source: sourceFactory.make(SourceDescriptor.parse(sourceSpec)),
                 transport: try UnixSocketTransport(listeningAt: socketPath)
             )
         )

@@ -11,8 +11,8 @@ import FauxDomain
     #expect(frame.pixels.contains { $0 > 100 })
 }
 
-@Test func frameSourceFactoryBuildsCustomImageForImageSpec() {
+@Test func frameSourceFactoryBuildsCustomImageForImageDescriptor() {
     let factory = FrameSourceFactory()
-    #expect(factory.make("image") is CustomImageSource)
-    #expect(factory.make("image:/nonexistent/path.png") is CustomImageSource)
+    #expect(factory.make(.testImage) is CustomImageSource)
+    #expect(factory.make(.image(URL(fileURLWithPath: "/nonexistent/path.png"))) is CustomImageSource)
 }

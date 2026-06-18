@@ -21,7 +21,7 @@ private let device = SimDevice(udid: "UDID-1", name: "iPhone", runtime: "iOS 26.
 @Test func runSessionThrowsWhenDylibMissing() {
     let session = FauxRunSession(runSimctl: { _, _ in 0 }, fileExists: { _ in false })
     #expect(throws: FauxRunSession.StartError.self) {
-        try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+        try session.start(descriptor: .testImage, device: device, bundleIdentifier: "com.app",
                           configuration: .init(dylibPath: "/missing.dylib", socketPath: uniqueSocket("missing")))
     }
 }
@@ -29,7 +29,7 @@ private let device = SimDevice(udid: "UDID-1", name: "iPhone", runtime: "iOS 26.
 @Test func runSessionThrowsWhenLaunchFails() {
     let session = FauxRunSession(runSimctl: { _, _ in 1 }, fileExists: { _ in true })
     #expect(throws: FauxRunSession.StartError.self) {
-        try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+        try session.start(descriptor: .testImage, device: device, bundleIdentifier: "com.app",
                           configuration: .init(dylibPath: "/lib.dylib", socketPath: uniqueSocket("launchfail")))
     }
 }
@@ -39,7 +39,7 @@ private let device = SimDevice(udid: "UDID-1", name: "iPhone", runtime: "iOS 26.
     let session = FauxRunSession(runSimctl: { args, env in recorder.record(args, env); return 0 }, fileExists: { _ in true })
     let socket = uniqueSocket("ok")
 
-    try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+    try session.start(descriptor: .testImage, device: device, bundleIdentifier: "com.app",
                       configuration: .init(dylibPath: "/path/lib.dylib", socketPath: socket))
 
     let launch = try #require(recorder.calls.last)
@@ -53,12 +53,12 @@ private let device = SimDevice(udid: "UDID-1", name: "iPhone", runtime: "iOS 26.
 
 @Test func runSessionRejectsASecondStartWhileRunning() throws {
     let session = FauxRunSession(runSimctl: { _, _ in 0 }, fileExists: { _ in true })
-    try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+    try session.start(descriptor: .testImage, device: device, bundleIdentifier: "com.app",
                       configuration: .init(dylibPath: "/lib.dylib", socketPath: uniqueSocket("first")))
     defer { session.stop() }
 
     #expect(throws: FauxRunSession.StartError.self) {
-        try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+        try session.start(descriptor: .testImage, device: device, bundleIdentifier: "com.app",
                           configuration: .init(dylibPath: "/lib.dylib", socketPath: uniqueSocket("second")))
     }
 }

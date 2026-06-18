@@ -51,5 +51,5 @@ private func decodeQR(from frame: Frame) -> String? {
 }
 
 @Test func factoryMakesQRCodeSourceForQRSpec() {
-    #expect(FrameSourceFactory().make("qr:hello") is QRCodeSource)
+    #expect(FrameSourceFactory().make(.qr("hello")) is QRCodeSource)
 }

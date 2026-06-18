@@ -175,47 +175,37 @@ struct RootView: View {
 
     // MARK: Frame (shape + zoom)
 
-    private var frameSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Frame", systemImage: "aspectratio")
-                    Spacer()
-                    Text("\(controller.outputSize.width) × \(controller.outputSize.height)")
-                        .font(.callout.monospacedDigit().weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
+    @ViewBuilder private var frameSection: some View {
+        if controller.sourceKind.supportsFraming {
+            GroupBox {
                 HStack(spacing: 8) {
-                    Picker("Shape", selection: $controller.cropShape) {
-                        Text("Square").tag(CropShape.square)
-                        Text("16:9").tag(CropShape.landscape)
-                        Text("9:16").tag(CropShape.portrait)
-                        Text("Device").tag(CropShape.device)
+                    Button { stepZoom(-0.05) } label: { Image(systemName: "minus.magnifyingglass") }
+                        .buttonStyle(.borderless).help("Show less (zoom in)")
+                    Slider(value: zoomBinding, in: 0.1...1)
+                    Button { stepZoom(0.05) } label: { Image(systemName: "plus.magnifyingglass") }
+                        .buttonStyle(.borderless).help("Show more (zoom out)")
+                    Text("\(controller.region.zoomPercent)%")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                    if !controller.region.isCentered {
+                        Button { controller.region = CropRegion(zoom: controller.region.zoom, aspect: controller.region.aspect) } label: {
+                            Image(systemName: "scope")
+                        }
+                        .buttonStyle(.borderless).help("Re-center")
                     }
-                    .pickerStyle(.segmented).labelsHidden()
-                    if controller.shapeChangedWhileRunning {
+                    if controller.aspectChangedWhileRunning {
                         Button("Apply") { controller.restart() }
                             .buttonStyle(.borderedProminent).controlSize(.small)
-                            .help("Relaunch at \(controller.outputSize.width)×\(controller.outputSize.height)")
+                            .help("Relaunch at the new device size")
                     }
                 }
-                if controller.sourceKind.supportsFraming {
-                    HStack(spacing: 8) {
-                        Text("Shown").font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
-                        Slider(value: zoomBinding, in: 0.1...1)
-                        Text("\(controller.region.zoomPercent)%")
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
-                        if !controller.region.isCentered {
-                            Button { controller.region = CropRegion(zoom: controller.region.zoom, aspect: controller.region.aspect) } label: {
-                                Image(systemName: "scope")
-                            }
-                            .buttonStyle(.borderless).help("Re-center")
-                        }
-                    }
-                }
+                .help("Drag the box on the preview to pick which part of the source the app sees; zoom sets how much.")
             }
-            .help("Output shape (aspect) is sent to the app. For image/video, set how much is shown and drag the box on the preview to pick which part.")
         }
+    }
+
+    private func stepZoom(_ delta: Double) {
+        controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY,
+                                       zoom: controller.region.zoom + delta, aspect: controller.region.aspect)
     }
 
     private var zoomBinding: Binding<Double> {

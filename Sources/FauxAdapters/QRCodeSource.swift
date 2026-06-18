@@ -9,23 +9,28 @@ public final class QRCodeSource: FrameSource, @unchecked Sendable {
     private let payload: Data
     private let scaler = PixelBufferScaler()
     private let clock: @Sendable () -> UInt64
+    private let crop: @Sendable () -> CropRegion
 
-    public init(text: String, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    public init(text: String, crop: @escaping @Sendable () -> CropRegion = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.payload = Data(text.utf8)
+        self.crop = crop
         self.clock = clock
     }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
-        let canvas = qrCanvas(width: demand.requestedWidth, height: demand.requestedHeight)
-        guard let frame = scaler.frame(
-            from: canvas,
-            aspectFill: false,
-            position: demand.position,
-            width: demand.requestedWidth,
-            height: demand.requestedHeight,
-            presentationTimeNanoseconds: clock()
-        ) else { return blackFrame(for: demand, clock: clock) }
-        return frame
+        let region = crop()
+        if region == .identity {
+            let canvas = qrCanvas(width: demand.requestedWidth, height: demand.requestedHeight)
+            return scaler.frame(from: canvas, aspectFill: false, position: demand.position,
+                                width: demand.requestedWidth, height: demand.requestedHeight,
+                                presentationTimeNanoseconds: clock()) ?? blackFrame(for: demand, clock: clock)
+        }
+        // A crop is set: render the QR on a square reference canvas, then crop the chosen region.
+        let reference = max(demand.requestedWidth, demand.requestedHeight)
+        let canvas = qrCanvas(width: reference, height: reference)
+        return scaler.frame(from: canvas, region: region, position: demand.position,
+                            width: demand.requestedWidth, height: demand.requestedHeight,
+                            presentationTimeNanoseconds: clock()) ?? blackFrame(for: demand, clock: clock)
     }
 
     private func qrCanvas(width: Int, height: Int) -> CIImage {

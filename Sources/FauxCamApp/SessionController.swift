@@ -36,7 +36,7 @@ final class SessionController: ObservableObject {
             }
         }
         var needsDetail: Bool { self == .video || self == .qr }
-        var supportsFraming: Bool { self == .image || self == .video }
+        var supportsFraming: Bool { self != .webcam }
         var detailPrompt: String { self == .video ? "/path/to/clip.mov" : "Text to encode" }
         var footerHint: String {
             switch self {
@@ -56,18 +56,18 @@ final class SessionController: ObservableObject {
 
     @Published var sourceKind: SourceKind = .image
     @Published var region: CropRegion = .identity { didSet { session.setCrop(region) } }
-    @Published var cropShape: CropShape = .device { didSet { if !isRunning { syncRegionAspect() } } }
     @Published var deviceAspect: Double = 9.0 / 19.5
-    @Published private(set) var appliedShape: CropShape = .device
+    @Published private(set) var appliedAspect: Double = 0
     @Published var imagePath: String = "" { didSet { loadPreviewImage() } }
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
     @Published private(set) var previewImage: NSImage?
 
-    /// Output aspect (width/height) from the chosen shape, deferring to the live device aspect.
-    var outputAspect: Double { cropShape.aspectRatio(deviceAspect: deviceAspect) }
+    /// The output (and crop-box) aspect always matches the selected simulator's screen, so the fake
+    /// camera fills the device — the user only chooses WHERE and HOW MUCH of the source to show.
+    var outputAspect: Double { deviceAspect > 0 ? deviceAspect : 9.0 / 19.5 }
 
-    /// The guest frame size (fixed at launch), derived from the shape at a fixed short-side base.
+    /// The guest frame size (fixed at launch), derived from the device aspect at a fixed base.
     var outputSize: (width: Int, height: Int) {
         let aspect = outputAspect
         if aspect >= 1 {
@@ -78,9 +78,9 @@ final class SessionController: ObservableObject {
     }
     private func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
 
-    var shapeChangedWhileRunning: Bool { isRunning && cropShape != appliedShape }
+    var aspectChangedWhileRunning: Bool { isRunning && abs(outputAspect - appliedAspect) > 0.001 }
 
-    /// Keeps the live region's aspect equal to the chosen output aspect (so the crop never distorts).
+    /// Keeps the live region's aspect equal to the device aspect (so the crop box matches the screen).
     func syncRegionAspect() {
         region = CropRegion(centerX: region.centerX, centerY: region.centerY, zoom: region.zoom, aspect: outputAspect)
     }
@@ -146,12 +146,12 @@ final class SessionController: ObservableObject {
         }
     }
 
-    var resolvedSourceSpec: String {
+    var sourceDescriptor: SourceDescriptor {
         switch sourceKind {
-        case .image: return imagePath.isEmpty ? "image" : "image:\(imagePath)"
-        case .webcam: return "webcam"
-        case .video: return "video:\(videoPath)"
-        case .qr: return "qr:\(qrText)"
+        case .image: return imagePath.isEmpty ? .testImage : .image(URL(fileURLWithPath: imagePath))
+        case .webcam: return .webcam
+        case .video: return .video(URL(fileURLWithPath: videoPath))
+        case .qr: return .qr(qrText)
         }
     }
 
@@ -188,7 +188,7 @@ final class SessionController: ObservableObject {
                 self.aspectInFlight = false
                 guard udid == self.selectedUDID, let aspect else { return }
                 self.deviceAspect = aspect
-                if !self.isRunning, self.cropShape == .device { self.syncRegionAspect() }
+                if !self.isRunning { self.syncRegionAspect() }
             }
         }
     }
@@ -245,9 +245,10 @@ final class SessionController: ObservableObject {
 
     func start() {
         guard canStart, let device = selectedDevice else { return }
-        let spec = resolvedSourceSpec
+        let descriptor = sourceDescriptor
+        let sourceLabel = sourceKind.title
         let bundle = bundleIdentifier
-        let startShape = cropShape
+        let startAspect = outputAspect
         syncRegionAspect()
         let size = outputSize
         let configuration = FauxRunSession.Configuration(
@@ -260,13 +261,13 @@ final class SessionController: ObservableObject {
         status = "Launching \(device.name)…"
         Task.detached { [session] in
             do {
-                try session.start(sourceSpec: spec, device: device, bundleIdentifier: bundle, configuration: configuration)
+                try session.start(descriptor: descriptor, device: device, bundleIdentifier: bundle, configuration: configuration)
                 await MainActor.run {
                     self.isBusy = false
                     self.isRunning = true
                     self.isError = false
-                    self.appliedShape = startShape
-                    self.status = "serving \(spec) → \(bundle)"
+                    self.appliedAspect = startAspect
+                    self.status = "serving \(sourceLabel) → \(bundle)"
                 }
             } catch {
                 await MainActor.run {
