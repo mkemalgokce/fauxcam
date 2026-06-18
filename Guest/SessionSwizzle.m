@@ -26,6 +26,7 @@ static const void *kSessionPreviewLayersKey = &kSessionPreviewLayersKey;
 static const void *kMetadataDelegateKey = &kMetadataDelegateKey;
 static const void *kMetadataQueueKey = &kMetadataQueueKey;
 static const void *kMetadataPumpKey = &kMetadataPumpKey;
+static const void *kPhotoPumpKey = &kPhotoPumpKey;
 
 static IMP fauxNSObjectInit;
 static IMP fauxOriginalInputInit;
@@ -144,6 +145,105 @@ static CIDetector *fauxQRDetector(void) {
 @implementation FauxMetadataTarget
 @end
 
+// MARK: - Fake photo (AVCapturePhotoOutput)
+
+static const void *kPhotoUniqueIDKey = &kPhotoUniqueIDKey;
+static const void *kPhotoDimensionsWidthKey = &kPhotoDimensionsWidthKey;
+static const void *kPhotoDimensionsHeightKey = &kPhotoDimensionsHeightKey;
+static const void *kPhotoFileDataKey = &kPhotoFileDataKey;
+static const void *kPhotoPixelBufferKey = &kPhotoPixelBufferKey;
+static const void *kPhotoResolvedSettingsKey = &kPhotoResolvedSettingsKey;
+
+static int64_t fauxResolvedUniqueID(id self, SEL _cmd) {
+    return [objc_getAssociatedObject(self, kPhotoUniqueIDKey) longLongValue];
+}
+static CMVideoDimensions fauxResolvedPhotoDimensions(id self, SEL _cmd) {
+    CMVideoDimensions dimensions;
+    dimensions.width = [objc_getAssociatedObject(self, kPhotoDimensionsWidthKey) intValue];
+    dimensions.height = [objc_getAssociatedObject(self, kPhotoDimensionsHeightKey) intValue];
+    return dimensions;
+}
+static CMVideoDimensions fauxResolvedZeroDimensions(id self, SEL _cmd) {
+    CMVideoDimensions dimensions = { 0, 0 };
+    return dimensions;
+}
+
+static id fauxMakeResolvedSettings(int64_t uniqueID, int32_t width, int32_t height) {
+    static Class settingsClass;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class superClass = objc_getClass("AVCaptureResolvedPhotoSettings");
+        if (!superClass) return;
+        settingsClass = objc_allocateClassPair(superClass, "FauxResolvedPhotoSettings", 0);
+        if (!settingsClass) return;
+        NSString *dimsTypes = [NSString stringWithFormat:@"%s@:", @encode(CMVideoDimensions)];
+        class_addMethod(settingsClass, @selector(uniqueID), (IMP)fauxResolvedUniqueID, "q@:");
+        class_addMethod(settingsClass, @selector(photoDimensions), (IMP)fauxResolvedPhotoDimensions, dimsTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(previewDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(livePhotoMovieDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
+        objc_registerClassPair(settingsClass);
+    });
+    if (!settingsClass) return nil;
+    id settings = class_createInstance(settingsClass, 0);
+    objc_setAssociatedObject(settings, kPhotoUniqueIDKey, @(uniqueID), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(settings, kPhotoDimensionsWidthKey, @(width), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(settings, kPhotoDimensionsHeightKey, @(height), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return settings;
+}
+
+static NSData *fauxPhotoFileDataRepresentation(id self, SEL _cmd) {
+    return objc_getAssociatedObject(self, kPhotoFileDataKey);
+}
+static CVPixelBufferRef fauxPhotoPixelBuffer(id self, SEL _cmd) {
+    return (__bridge CVPixelBufferRef)objc_getAssociatedObject(self, kPhotoPixelBufferKey);
+}
+static id fauxPhotoResolvedSettings(id self, SEL _cmd) {
+    return objc_getAssociatedObject(self, kPhotoResolvedSettingsKey);
+}
+static CGImageRef fauxPhotoCGImageRepresentation(id self, SEL _cmd) {
+    CVPixelBufferRef buffer = (__bridge CVPixelBufferRef)objc_getAssociatedObject(self, kPhotoPixelBufferKey);
+    if (!buffer) return NULL;
+    static CIContext *context;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ context = [CIContext context]; });
+    CIImage *image = [CIImage imageWithCVPixelBuffer:buffer];
+    return (CGImageRef)CFAutorelease([context createCGImage:image fromRect:image.extent]);
+}
+
+static NSData *fauxJPEGFromPixelBuffer(CVPixelBufferRef buffer) {
+    if (!buffer) return nil;
+    static CIContext *context;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ context = [CIContext context]; });
+    CIImage *image = [CIImage imageWithCVPixelBuffer:buffer];
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    NSData *data = [context JPEGRepresentationOfImage:image colorSpace:colorSpace options:@{}];
+    CGColorSpaceRelease(colorSpace);
+    return data;
+}
+
+static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
+    static Class photoClass;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class superClass = objc_getClass("AVCapturePhoto");
+        if (!superClass) return;
+        photoClass = objc_allocateClassPair(superClass, "FauxCapturePhoto", 0);
+        if (!photoClass) return;
+        class_addMethod(photoClass, @selector(fileDataRepresentation), (IMP)fauxPhotoFileDataRepresentation, "@@:");
+        class_addMethod(photoClass, @selector(pixelBuffer), (IMP)fauxPhotoPixelBuffer, "^{__CVBuffer=}@:");
+        class_addMethod(photoClass, @selector(CGImageRepresentation), (IMP)fauxPhotoCGImageRepresentation, "^{CGImage=}@:");
+        class_addMethod(photoClass, @selector(resolvedSettings), (IMP)fauxPhotoResolvedSettings, "@@:");
+        objc_registerClassPair(photoClass);
+    });
+    if (!photoClass) return nil;
+    id photo = class_createInstance(photoClass, 0);
+    objc_setAssociatedObject(photo, kPhotoFileDataKey, fauxJPEGFromPixelBuffer(buffer), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(photo, kPhotoPixelBufferKey, (__bridge id)buffer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(photo, kPhotoResolvedSettingsKey, resolvedSettings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return photo;
+}
+
 // MARK: - Frame pump
 
 @interface FauxFramePump : NSObject
@@ -156,6 +256,7 @@ static CIDetector *fauxQRDetector(void) {
 - (void)stop;
 - (void)registerPreviewLayer:(CALayer *)previewLayer;
 - (void)registerMetadataDelegate:(id)delegate queue:(dispatch_queue_t)queue output:(id)output connection:(id)connection;
+- (void)markPhotoConsumer;
 - (CVPixelBufferRef)copyLatestImageBuffer CF_RETURNS_RETAINED;
 @end
 
@@ -171,6 +272,7 @@ static CIDetector *fauxQRDetector(void) {
     BOOL _startRequested;
     BOOL _loggedPreviewDelivery;
     BOOL _loggedMetadataDelivery;
+    BOOL _hasPhotoConsumer;
     int32_t _frameWidth;
     int32_t _frameHeight;
     int32_t _framesPerSecond;
@@ -210,8 +312,10 @@ static CIDetector *fauxQRDetector(void) {
     [self startIfReady];
 }
 
+- (void)markPhotoConsumer { _hasPhotoConsumer = YES; [self startIfReady]; }
+
 - (BOOL)hasConsumer {
-    if (self.sampleBufferDelegate && self.deliveryQueue) return YES;
+    if ((self.sampleBufferDelegate && self.deliveryQueue) || _hasPhotoConsumer) return YES;
     @synchronized(self) { return _previewTargets.count > 0 || _metadataTargets.count > 0; }
 }
 
@@ -514,6 +618,40 @@ static NSArray *fauxMetadataAvailableTypes(id self, SEL _cmd) {
     return @[ AVMetadataObjectTypeQRCode ];
 }
 
+static void fauxInvokePhotoDelegate(id delegate, SEL selector, id output, id argument) {
+    if ([delegate respondsToSelector:selector]) {
+        ((void (*)(id, SEL, id, id))objc_msgSend)(delegate, selector, output, argument);
+    }
+}
+
+static void fauxCapturePhotoWithSettings(id self, SEL _cmd, id settings, id delegate) {
+    FauxFramePump *pump = objc_getAssociatedObject(self, kPhotoPumpKey);
+    CVPixelBufferRef buffer = pump ? [pump copyLatestImageBuffer] : NULL;
+    int64_t uniqueID = 0;
+    if ([settings respondsToSelector:@selector(uniqueID)]) {
+        uniqueID = ((int64_t (*)(id, SEL))objc_msgSend)(settings, @selector(uniqueID));
+    }
+    int32_t width = buffer ? (int32_t)CVPixelBufferGetWidth(buffer) : 0;
+    int32_t height = buffer ? (int32_t)CVPixelBufferGetHeight(buffer) : 0;
+    id resolvedSettings = fauxMakeResolvedSettings(uniqueID, width, height);
+    id photo = buffer ? fauxMakePhoto(buffer, resolvedSettings) : nil;
+    if (buffer) CVPixelBufferRelease(buffer);
+    id output = self;
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        fauxInvokePhotoDelegate(delegate, @selector(captureOutput:willBeginCaptureForResolvedSettings:), output, resolvedSettings);
+        fauxInvokePhotoDelegate(delegate, @selector(captureOutput:willCapturePhotoForResolvedSettings:), output, resolvedSettings);
+        fauxInvokePhotoDelegate(delegate, @selector(captureOutput:didCapturePhotoForResolvedSettings:), output, resolvedSettings);
+        if (photo && [delegate respondsToSelector:@selector(captureOutput:didFinishProcessingPhoto:error:)]) {
+            ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishProcessingPhoto:error:), output, photo, nil);
+        }
+        if ([delegate respondsToSelector:@selector(captureOutput:didFinishCaptureForResolvedSettings:error:)]) {
+            ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishCaptureForResolvedSettings:error:), output, resolvedSettings, nil);
+        }
+        os_log(fauxSessionLog(), "photo captured (%dx%d)", width, height);
+    });
+}
+
 static BOOL fauxInputIsFake(id input) {
     return objc_getAssociatedObject(input, kFakeInputDeviceKey) != nil;
 }
@@ -546,6 +684,12 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
         if (delegate && queue) {
             [pump registerMetadataDelegate:delegate queue:queue output:output connection:fauxMakeConnection()];
         }
+        return;
+    }
+    if ([output isKindOfClass:objc_getClass("AVCapturePhotoOutput")]) {
+        FauxFramePump *pump = fauxPumpForSession(self);
+        objc_setAssociatedObject(output, kPhotoPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [pump markPhotoConsumer];
         return;
     }
     if (fauxOriginalAddOutput) {
@@ -630,6 +774,10 @@ void FauxInstallCaptureSession(void) {
         if (metadataClass) {
             fauxReplaceInstanceMethod(metadataClass, @selector(setMetadataObjectsDelegate:queue:), (IMP)fauxSetMetadataDelegate, "v@:@@");
             fauxReplaceInstanceMethod(metadataClass, @selector(availableMetadataObjectTypes), (IMP)fauxMetadataAvailableTypes, "@@:");
+        }
+        Class photoClass = objc_getClass("AVCapturePhotoOutput");
+        if (photoClass) {
+            fauxReplaceInstanceMethod(photoClass, @selector(capturePhotoWithSettings:delegate:), (IMP)fauxCapturePhotoWithSettings, "v@:@@");
         }
         os_log(fauxSessionLog(), "capture session interception installed");
     });

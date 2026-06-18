@@ -7,12 +7,15 @@ struct FixtureApp: App {
     private let frameProbe = CameraFrameProbe()
     private let previewProbe = CameraPreviewProbe()
     private let metadataProbe = CameraMetadataProbe()
+    private let photoProbe = CameraPhotoProbe()
 
     init() {
         CameraDiscoveryProbe.run()
         let environment = ProcessInfo.processInfo.environment
         if environment["FAUXCAM_METADATA_PROBE"] != nil {
             metadataProbe.start()
+        } else if environment["FAUXCAM_PHOTO_PROBE"] != nil {
+            photoProbe.start()
         } else {
             frameProbe.start()
         }
@@ -151,5 +154,34 @@ private final class CameraMetadataProbe: NSObject, AVCaptureMetadataOutputObject
             os_log("metadata scanned type=%{public}@ value=%{public}@", log: Self.log,
                    code.type.rawValue, code.stringValue ?? "nil")
         }
+    }
+}
+
+private final class CameraPhotoProbe: NSObject, AVCapturePhotoCaptureDelegate {
+    private static let log = OSLog(subsystem: "com.fauxcam", category: "probe")
+    private let session = AVCaptureSession()
+    private let photoOutput = AVCapturePhotoOutput()
+
+    func start() {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+              let input = try? AVCaptureDeviceInput(device: camera),
+              session.canAddInput(input), session.canAddOutput(photoOutput) else {
+            os_log("photo setup failed", log: Self.log, type: .error)
+            return
+        }
+        session.addInput(input)
+        session.addOutput(photoOutput)
+        session.startRunning()
+        os_log("photo probe started", log: Self.log)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+            photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+        }
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        let bytes = photo.fileDataRepresentation()?.count ?? -1
+        let dimensions = photo.resolvedSettings.photoDimensions
+        os_log("photo received bytes=%{public}d dims=%{public}dx%{public}d", log: Self.log,
+               bytes, dimensions.width, dimensions.height)
     }
 }

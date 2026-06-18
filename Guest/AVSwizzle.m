@@ -83,6 +83,8 @@ static NSString *fauxFormatMediaType(id self, SEL _cmd) { return kVideoMediaType
 static NSString *fauxFormatDescriptionText(id self, SEL _cmd) {
     return [NSString stringWithFormat:@"<FauxCaptureDeviceFormat %dx%d>", faux_config_width(), faux_config_height()];
 }
+static void *fauxFormatNullPointer(id self, SEL _cmd) { return NULL; }
+static id fauxFormatEmptyArray(id self, SEL _cmd) { return @[]; }
 
 static id fauxSharedFormat(void) {
     static id format;
@@ -97,6 +99,8 @@ static id fauxSharedFormat(void) {
             class_addMethod(formatClass, @selector(formatDescription), (IMP)fauxFormatDescription, "^{opaqueCMFormatDescription=}@:");
             class_addMethod(formatClass, @selector(mediaType), (IMP)fauxFormatMediaType, "@@:");
             class_addMethod(formatClass, @selector(description), (IMP)fauxFormatDescriptionText, "@@:");
+            class_addMethod(formatClass, sel_registerName("figCaptureSourceVideoFormat"), (IMP)fauxFormatNullPointer, "^v@:");
+            class_addMethod(formatClass, @selector(videoSupportedFrameRateRanges), (IMP)fauxFormatEmptyArray, "@@:");
             objc_registerClassPair(formatClass);
         }
         format = class_createInstance(formatClass, 0);
