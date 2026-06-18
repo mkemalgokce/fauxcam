@@ -473,8 +473,10 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 }
 
 - (void)connectHostSocket {
+    // Tier A (per-app launch) sets FAUXCAM_SOCKET. Auto-mode injects via the LLDB stop-hook
+    // with no env, so fall back to the shared auto-injection server's well-known socket.
     const char *socketPath = getenv("FAUXCAM_SOCKET");
-    if (!socketPath || socketPath[0] == '\0') return;
+    if (!socketPath || socketPath[0] == '\0') socketPath = FAUX_AUTO_SOCKET;
     _frameClient = faux_frame_client_create();
     if (_frameClient
         && faux_frame_client_connect(_frameClient, socketPath) == 0

@@ -27,6 +27,15 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
         try startListening()
     }
 
+    /// Adopts an already-accepted client socket (one connection of a multi-client server). It owns no
+    /// listen socket, so it never binds or accepts — it just reads the handshake/demand and delivers.
+    public init(clientDescriptor: Int32) {
+        self.path = ""
+        self.clientDescriptor = clientDescriptor
+        var suppressSignalPipe: Int32 = 1
+        setsockopt(clientDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     deinit { close() }
 
     public func awaitDemand() throws -> Demand? {

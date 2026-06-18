@@ -9,10 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let camera = CameraAuthorization()
     let preview = PreviewStreamer()
     let appIcons = AppIconStore()
+    let autoMode = AutoModeController()
 
     func applicationWillTerminate(_ notification: Notification) {
         controller.stopSynchronously()
         preview.stop()
+        autoMode.cleanupForQuit()
     }
 }
 
@@ -23,7 +25,8 @@ struct FauxCamApp: App {
     var body: some Scene {
         MenuBarExtra {
             RootView(controller: appDelegate.controller, camera: appDelegate.camera,
-                     preview: appDelegate.preview, appIcons: appDelegate.appIcons)
+                     preview: appDelegate.preview, appIcons: appDelegate.appIcons,
+                     autoMode: appDelegate.autoMode)
                 .frame(width: 360)
         } label: {
             Image(nsImage: Self.menuBarIcon)
@@ -54,6 +57,8 @@ struct RootView: View {
     @ObservedObject var camera: CameraAuthorization
     @ObservedObject var preview: PreviewStreamer
     @ObservedObject var appIcons: AppIconStore
+    @ObservedObject var autoMode: AutoModeController
+    @State private var confirmingAutoMode = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     private var simulatorSelection: Binding<String?> {
@@ -72,10 +77,17 @@ struct RootView: View {
             VStack(spacing: 12) {
                 destinationSection
                 sourceSection
+                autoModeSection
             }
             .padding(.horizontal, 16)
 
             ActionBar(controller: controller)
+        }
+        .alert("Enable auto-inject?", isPresented: $confirmingAutoMode) {
+            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("FauxCam adds a hook to ~/.lldbinit-Xcode so every simulator app loads the fake camera — no Start needed. It's removed when you turn this off or quit FauxCam. Relaunch your running simulator apps to apply.")
         }
         .onAppear {
             controller.refresh()
@@ -90,7 +102,7 @@ struct RootView: View {
         .onChange(of: controller.videoPath) { _, _ in sourceChanged() }
         .onChange(of: controller.qrText) { _, _ in sourceChanged() }
         .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
-        .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region) }
+        .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
         .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
         .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
@@ -102,6 +114,31 @@ struct RootView: View {
     private func sourceChanged() {
         reconfigurePreview()
         controller.applyLiveSource()
+        autoMode.setSourceDescriptor(controller.sourceDescriptor)
+    }
+
+    private var autoModeSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Auto-inject all simulators", systemImage: "bolt.badge.automatic")
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { autoMode.isActive },
+                        set: { $0 ? (confirmingAutoMode = true) : autoMode.disable() }
+                    ))
+                    .labelsHidden().toggleStyle(.switch)
+                }
+                Text(autoMode.isActive
+                     ? "On — every simulator app gets the camera. Relaunch your apps to apply."
+                     : "Inject into every simulator app automatically, no Start needed. Removed when off or on quit.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let error = autoMode.lastError {
+                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                }
+            }
+        }
     }
 
     private func reconfigurePreview() {

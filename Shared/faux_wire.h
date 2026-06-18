@@ -26,6 +26,11 @@ typedef struct __attribute__((packed)) {
 
 #define FAUX_SOCKET_DIR "/private/tmp/com.fauxcam"
 
+// Well-known socket the auto-injection server listens on. A guest injected via the
+// LLDB stop-hook (no FAUXCAM_SOCKET env) falls back to this single shared server,
+// which serves every simulator app at once. Per-app launches still use a private path.
+#define FAUX_AUTO_SOCKET FAUX_SOCKET_DIR "/auto.sock"
+
 typedef enum {
     FAUX_POSITION_UNSPECIFIED = 0,
     FAUX_POSITION_BACK        = 1,
