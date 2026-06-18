@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 import FauxDomain
 import FauxAdapters
 
@@ -23,12 +24,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "FauxCam Settings"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView:
-                SettingsView(settings: settings, autoMode: autoMode, controller: controller))
+                SettingsView(settings: settings, autoMode: autoMode, controller: controller,
+                             onUninstall: { [weak self] in self?.uninstall() }))
             window.center()
             settingsWindow = window
         }
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Removes every trace of FauxCam: injection on all sims, login item, preferences, app-support
+    /// files + sockets, then moves the app bundle to the Trash and quits.
+    func uninstall() {
+        autoMode.reset(deviceUDIDs: controller.devices.map(\.udid))
+        try? SMAppService.mainApp.unregister()
+        if let domain = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+        }
+        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            try? FileManager.default.removeItem(at: support.appendingPathComponent("com.fauxcam"))
+        }
+        try? FileManager.default.removeItem(atPath: "/private/tmp/com.fauxcam")
+        NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
+            DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -147,15 +166,12 @@ struct RootView: View {
 
     private func enableAutoInject() {
         autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
-                        deviceUDIDs: controller.devices.map(\.udid),
-                        width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
+                        deviceUDIDs: controller.devices.map(\.udid), fps: settings.autoFps)
     }
 
     private func deviceChanged() {
         reconfigurePreview()
-        if autoMode.isActive {
-            autoMode.setFrameSize(width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
-        }
+        autoMode.applyFrameSize(forDevice: controller.selectedUDID, aspect: controller.deviceAspect)
     }
 
     private var footer: some View {

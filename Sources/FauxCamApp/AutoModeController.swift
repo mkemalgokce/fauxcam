@@ -2,35 +2,38 @@ import SwiftUI
 import FauxDomain
 import FauxAdapters
 
-/// Drives auto-injection: sets DYLD_INSERT_LIBRARIES in each booted simulator's launchd so every app
-/// it launches (tapped open OR run from Xcode) loads the guest dylib, and runs one multi-client server
-/// feeding them all. The env touches no host file and is unset on toggle-off and on quit (and clears
-/// itself on sim reboot), so it never lingers.
+/// Drives auto-injection: sets DYLD_INSERT_LIBRARIES (and the frame size matching THAT simulator's
+/// screen) in each booted simulator's launchd, so every app it launches — tapped open or run from
+/// Xcode — loads the guest dylib and serves frames at the device's own aspect. The env touches no host
+/// file and is unset on toggle-off and on quit (and clears on sim reboot), so it never lingers.
 @MainActor
 final class AutoModeController: ObservableObject {
     @Published private(set) var isActive = false
     @Published var lastError: String?
 
     private let injector: SimEnvInjector
+    private let aspectProvider: DeviceScreenAspectProviding
     private var server: AutoInjectionServer?
     private var injectedUDIDs: Set<String> = []
-    private var autoFrame: (width: Int, height: Int, fps: Int)?
+    private var fps = 30
 
-    init(dylibPath: String = SessionController.defaultDylibPath()) {
+    init(dylibPath: String = SessionController.defaultDylibPath(),
+         aspectProvider: DeviceScreenAspectProviding = SimctlScreenshotAspectProvider()) {
         self.injector = SimEnvInjector(dylibPath: dylibPath)
+        self.aspectProvider = aspectProvider
     }
 
-    func enable(descriptor: SourceDescriptor, crop: CropRegion, deviceUDIDs: [String], width: Int, height: Int, fps: Int) {
+    func enable(descriptor: SourceDescriptor, crop: CropRegion, deviceUDIDs: [String], fps: Int) {
         do {
             let server = AutoInjectionServer(descriptor: descriptor)
             server.setCrop(crop)
             try server.start()
             self.server = server
-            autoFrame = (width, height, fps)
-            injector.install(onDevices: deviceUDIDs, width: width, height: height, fps: fps)
+            self.fps = fps
             injectedUDIDs = Set(deviceUDIDs)
             isActive = true
             lastError = deviceUDIDs.isEmpty ? "No booted simulators — boot one, then re-toggle." : nil
+            injectPerSim(deviceUDIDs)
         } catch {
             lastError = String(describing: error)
             server?.stop()
@@ -40,15 +43,48 @@ final class AutoModeController: ObservableObject {
     }
 
     /// Re-applies injection to simulators booted after auto-mode was turned on (and forgets ones that
-    /// shut down — their launchd env died with them).
+    /// shut down — their launchd env died with them). Each newly-booted sim gets its OWN aspect.
     func syncDevices(_ udids: [String]) {
         guard isActive else { return }
         let current = Set(udids)
         let newlyBooted = current.subtracting(injectedUDIDs)
-        if !newlyBooted.isEmpty {
-            injector.install(onDevices: Array(newlyBooted), width: autoFrame?.width, height: autoFrame?.height, fps: autoFrame?.fps)
-        }
         injectedUDIDs = current
+        if !newlyBooted.isEmpty { injectPerSim(Array(newlyBooted)) }
+    }
+
+    /// Re-advertises one simulator's frame size (e.g. after it's selected/rotated and its aspect was
+    /// re-fetched), so apps opened on it match its preview. Already-running apps relaunch to pick it up.
+    func applyFrameSize(forDevice udid: String, aspect: Double) {
+        guard isActive, injectedUDIDs.contains(udid) else { return }
+        let size = Self.outputSize(forAspect: aspect)
+        let injector = self.injector
+        let fps = self.fps
+        Task.detached { [injector, fps, udid, size] in
+            injector.setFrameSize(onDevices: [udid], width: size.0, height: size.1, fps: fps)
+        }
+    }
+
+    /// Off-main because each sim's aspect is read from a screenshot. Sets DYLD + that sim's own size.
+    private func injectPerSim(_ udids: [String]) {
+        guard !udids.isEmpty else { return }
+        let injector = self.injector
+        let provider = aspectProvider
+        let fps = self.fps
+        Task.detached { [injector, provider, fps, udids] in
+            for udid in udids {
+                let aspect = provider.aspect(forDeviceWithUDID: udid) ?? (9.0 / 19.5)
+                let size = AutoModeController.outputSize(forAspect: aspect)
+                injector.install(onDevices: [udid], width: size.0, height: size.1, fps: fps)
+            }
+        }
+    }
+
+    nonisolated static func outputSize(forAspect aspect: Double, shortSide: Int = 720) -> (Int, Int) {
+        let safe = aspect > 0 ? aspect : 9.0 / 19.5
+        func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
+        return safe >= 1
+            ? (even(Double(shortSide) * safe), shortSide)
+            : (shortSide, even(Double(shortSide) / safe))
     }
 
     func disable() {
@@ -75,8 +111,8 @@ final class AutoModeController: ObservableObject {
         if !leftover.isEmpty { injector.uninstall(fromDevices: leftover) }
     }
 
-    /// Full reset / uninstall: stop the server, unset DYLD on every device we touched OR that still
-    /// has a leftover, and delete stale sockets. The one-button "remove every trace".
+    /// Full cleanup: stop the server, unset DYLD on every device we touched OR that still has a
+    /// leftover, and delete stale sockets.
     func reset(deviceUDIDs: [String]) {
         server?.stop()
         server = nil
@@ -98,12 +134,4 @@ final class AutoModeController: ObservableObject {
 
     func setSourceDescriptor(_ descriptor: SourceDescriptor) { server?.setSourceDescriptor(descriptor) }
     func setCrop(_ crop: CropRegion) { server?.setCrop(crop) }
-
-    /// Re-advertises a new frame size on the injected sims (e.g. when the selected simulator changes,
-    /// so apps opened afterwards match the preview's aspect). Already-running apps relaunch to pick it up.
-    func setFrameSize(width: Int, height: Int, fps: Int) {
-        guard isActive else { return }
-        autoFrame = (width, height, fps)
-        injector.setFrameSize(onDevices: Array(injectedUDIDs), width: width, height: height, fps: fps)
-    }
 }

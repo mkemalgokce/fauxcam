@@ -4,43 +4,44 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var autoMode: AutoModeController
     @ObservedObject var controller: SessionController
-    @State private var didReset = false
+    let onUninstall: () -> Void
+    @State private var confirmingUninstall = false
 
     var body: some View {
         TabView {
             general.tabItem { Label("General", systemImage: "gearshape") }
-            customization.tabItem { Label("Camera", systemImage: "camera.aperture") }
             about.tabItem { Label("About", systemImage: "info.circle") }
-            support.tabItem { Label("Support", systemImage: "heart") }
         }
-        .frame(width: 480, height: 400)
-        .onChange(of: didReset) { _, reset in
-            guard reset else { return }
-            Task { try? await Task.sleep(for: .seconds(3)); didReset = false }
-        }
+        .frame(width: 460, height: 380)
     }
 
     // MARK: General
 
     private var general: some View {
         Form {
-            Section {
-                Toggle("Auto-inject into simulators", isOn: autoInjectBinding)
+            Section("Auto-inject") {
+                Toggle("Inject into simulators", isOn: autoInjectBinding)
                 Toggle("Turn on automatically at launch", isOn: $settings.autoEnableOnLaunch)
-                Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
-            } footer: {
-                Text("Auto-inject loads the fake camera into every app you open in your booted simulators — tapped open or run from Xcode.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Status") {
-                LabeledContent("Auto-inject") {
-                    Label(autoMode.isActive ? "Active" : "Off", systemImage: autoMode.isActive ? "bolt.fill" : "bolt.slash")
-                        .foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
-                        .font(.callout.weight(.medium))
+            Section("Startup") {
+                Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
+            }
+            Section {
+                Button(role: .destructive) { confirmingUninstall = true } label: {
+                    Label("Uninstall FauxCam", systemImage: "trash")
                 }
+            } footer: {
+                Text("Removes the launchd injection from every simulator, the login item, all preferences and sockets, then moves FauxCam to the Trash and quits.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog("Uninstall FauxCam and remove everything?", isPresented: $confirmingUninstall, titleVisibility: .visible) {
+            Button("Uninstall", role: .destructive, action: onUninstall)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cleans up all injection and moves the app to the Trash. Relaunch your simulator apps afterwards for a clean state.")
+        }
     }
 
     private var autoInjectBinding: Binding<Bool> {
@@ -50,8 +51,7 @@ struct SettingsView: View {
                 settings.autoEnableOnLaunch = on
                 if on {
                     autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
-                                    deviceUDIDs: controller.devices.map(\.udid),
-                                    width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
+                                    deviceUDIDs: controller.devices.map(\.udid), fps: settings.autoFps)
                 } else {
                     autoMode.disable()
                 }
@@ -59,76 +59,41 @@ struct SettingsView: View {
         )
     }
 
-    // MARK: Customization
-
-    private var customization: some View {
-        Form {
-            Section {
-                Stepper("Frames per second: \(settings.autoFps)", value: $settings.autoFps, in: 5...60, step: 5)
-            } header: {
-                Text("Camera")
-            } footer: {
-                Text("The resolution automatically matches the selected simulator's screen, so the preview and the device stay in sync.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                Button(role: .destructive) {
-                    autoMode.reset(deviceUDIDs: controller.devices.map(\.udid))
-                    didReset = true
-                } label: {
-                    Label("Reset — remove all injection", systemImage: "trash")
-                }
-                if didReset {
-                    Label("Done. Relaunch your simulator apps for a clean state.", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(.green)
-                }
-            } header: {
-                Text("Maintenance")
-            } footer: {
-                Text("Turns auto-inject off, unsets the launchd variable in every booted simulator (only where FauxCam set it), and deletes stale sockets.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
     // MARK: About
 
     private var about: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             appIcon
             Text("FauxCam").font(.title2.weight(.bold))
             Text("Version \(appVersion)").font(.caption).foregroundStyle(.secondary)
-            Text("An open-source macOS tool that feeds a custom camera — image, video, your Mac camera, or a QR code — into the iOS Simulator, where Apple gives you none.")
+            Text("Feeds a custom camera — image, video, your Mac camera, or a QR code — into the iOS Simulator.")
                 .font(.callout).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 8)
-            Label("All injection is removed when you turn it off or quit — nothing lingers on your Mac or in the simulators.", systemImage: "checkmark.shield")
-                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 12)
+
             Spacer()
-            Text("Made by Mustafa Kemal Gökçe").font(.caption2).foregroundStyle(.tertiary)
+
+            VStack(spacing: 10) {
+                LabeledContent("Developer", value: "Mustafa Kemal Gökçe")
+                aboutLink("GitHub", systemImage: "chevron.left.forwardslash.chevron.right", url: "https://github.com/mkemalgokce")
+                aboutLink("Email", systemImage: "envelope", url: "mailto:mkemaldev@gmail.com")
+            }
+            .padding(14)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
         }
-        .padding(24)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Support
-
-    private var support: some View {
-        Form {
-            Section("Resources") {
-                SupportRow("Documentation", systemImage: "book", url: "https://github.com/mkemalgokce/ios-simulator-camera")
-                SupportRow("Report an issue", systemImage: "exclamationmark.bubble", url: "https://github.com/mkemalgokce/ios-simulator-camera/issues/new")
+    private func aboutLink(_ title: String, systemImage: String, url: String) -> some View {
+        Button { if let link = URL(string: url) { NSWorkspace.shared.open(link) } } label: {
+            HStack {
+                Label(title, systemImage: systemImage)
+                Spacer()
+                Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
             }
-            Section("Feedback") {
-                SupportRow("Email the developer", systemImage: "envelope", url: "mailto:mkemaldev@gmail.com")
-            }
-            Section("Support development") {
-                SupportRow("Buy me a coffee", systemImage: "cup.and.saucer", url: "https://buymeacoffee.com/mkemalgokce", tint: .orange)
-            }
+            .contentShape(Rectangle())
         }
-        .formStyle(.grouped)
+        .buttonStyle(.plain)
     }
 
     private var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
@@ -142,30 +107,6 @@ struct SettingsView: View {
                 Image(systemName: "camera.aperture").font(.system(size: 52)).foregroundStyle(.orange)
             }
         }
-    }
-}
-
-private struct SupportRow: View {
-    let title: String
-    let systemImage: String
-    let url: String
-    var tint: Color = .accentColor
-    @Environment(\.openURL) private var openURL
-
-    init(_ title: String, systemImage: String, url: String, tint: Color = .accentColor) {
-        self.title = title; self.systemImage = systemImage; self.url = url; self.tint = tint
-    }
-
-    var body: some View {
-        Button { if let link = URL(string: url) { openURL(link) } } label: {
-            HStack {
-                Label(title, systemImage: systemImage).tint(tint)
-                Spacer()
-                Image(systemName: "arrow.up.right").font(.caption2).foregroundStyle(.tertiary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -194,7 +135,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.borderless).controlSize(.small)
             }
-            Text("Sets a launchd variable in your booted simulators — no files on your Mac, removed when you quit or turn it off. You can change this any time in Settings.")
+            Text("Sets a launchd variable in your booted simulators — no files on your Mac, removed when you quit or turn it off. Change this any time in Settings.")
                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }

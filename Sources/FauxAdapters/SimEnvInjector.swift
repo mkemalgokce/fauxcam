@@ -4,7 +4,7 @@ import Foundation
 /// process it launches afterwards — including apps you tap open in the simulator, not just ones run
 /// from Xcode — loads the guest dylib. Unlike an LLDB-init hook this touches no host file: the env
 /// lives only in the simulator's launchd and vanishes on sim reboot; we also unset it on disable/quit.
-public struct SimEnvInjector {
+public struct SimEnvInjector: Sendable {
     public static let injectedVariable = "DYLD_INSERT_LIBRARIES"
 
     private let dylibPath: String
