@@ -14,10 +14,12 @@ struct FauxCommand {
     private static let defaultDylibPath = "dist/libFaux.dylib"
     private static let defaultSocketPath = "/private/tmp/com.fauxcam/faux.sock"
 
-    private let doctor: DoctorService
-    private let serverFactory: (String) throws -> FauxServer
+    private static let defaultSourceSpec = "image"
 
-    init(doctor: DoctorService, serverFactory: @escaping (String) throws -> FauxServer) {
+    private let doctor: DoctorService
+    private let serverFactory: (String, String) throws -> FauxServer
+
+    init(doctor: DoctorService, serverFactory: @escaping (String, String) throws -> FauxServer) {
         self.doctor = doctor
         self.serverFactory = serverFactory
     }
@@ -28,15 +30,29 @@ struct FauxCommand {
         case "doctor":
             return runDoctor(path: arguments.dropFirst().first ?? Self.defaultDylibPath)
         case "serve":
-            return runServe(socketPath: arguments.dropFirst().first ?? Self.defaultSocketPath)
+            return runServe(arguments: Array(arguments.dropFirst()))
         default:
             return usage()
         }
     }
 
-    private func runServe(socketPath: String) -> Int32 {
+    private func runServe(arguments: [String]) -> Int32 {
+        var socketPath = Self.defaultSocketPath
+        var sourceSpec = Self.defaultSourceSpec
+        var positional: [String] = []
+        var index = 0
+        while index < arguments.count {
+            if arguments[index] == "--source", index + 1 < arguments.count {
+                sourceSpec = arguments[index + 1]
+                index += 2
+            } else {
+                positional.append(arguments[index])
+                index += 1
+            }
+        }
+        if let first = positional.first { socketPath = first }
         do {
-            try serverFactory(socketPath).run()
+            try serverFactory(socketPath, sourceSpec).run()
             return ExitCode.passed
         } catch {
             writeError("faux serve: FAIL — \(error)\n")
@@ -77,7 +93,7 @@ struct FauxCommand {
     }
 
     private func usage() -> Int32 {
-        print("usage: faux <doctor [path-to-dylib] | serve [socket-path]>")
+        print("usage: faux <doctor [path-to-dylib] | serve [socket-path] [--source image|video:<path>|webcam]>")
         return ExitCode.usageError
     }
 
