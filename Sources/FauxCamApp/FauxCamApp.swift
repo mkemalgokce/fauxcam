@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import ServiceManagement
 import FauxDomain
 import FauxAdapters
@@ -12,6 +13,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let autoMode = AutoModeController()
     let settings = AppSettings()
     private var settingsWindow: NSWindow?
+    private var pollTimer: Timer?
+    private var cancellables: Set<AnyCancellable> = []
+    private var didCleanLeftover = false
+
+    /// Injection is an app-level job, not a popover one: as long as FauxCam runs it polls for booted
+    /// simulators and keeps every one injected — whether or not the menu is open.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        controller.$devices
+            .receive(on: RunLoop.main)
+            .sink { [weak self] devices in self?.devicesChanged(devices) }
+            .store(in: &cancellables)
+        settings.$hasOnboarded
+            .receive(on: RunLoop.main)
+            .sink { [weak self] onboarded in if onboarded { self?.devicesChanged(self?.controller.devices ?? []) } }
+            .store(in: &cancellables)
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.controller.refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+        controller.refresh()
+    }
+
+    private func devicesChanged(_ devices: [SimDevice]) {
+        let udids = devices.map(\.udid)
+        if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
+        guard settings.hasOnboarded, !udids.isEmpty else { return }
+        if autoMode.isActive {
+            autoMode.syncDevices(udids)
+        } else {
+            autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
+                            deviceUDIDs: udids, fps: settings.autoFps)
+        }
+    }
 
     /// A SwiftUI `Settings` scene won't surface from a menu-bar-only app, so host the settings UI in a
     /// plain NSWindow we own and show on demand.
@@ -51,6 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        pollTimer?.invalidate()
+        pollTimer = nil
         preview.stop()
         autoMode.cleanupForQuit()
     }
@@ -98,15 +136,8 @@ struct RootView: View {
     @ObservedObject var autoMode: AutoModeController
     @ObservedObject var settings: AppSettings
     let onOpenSettings: () -> Void
-    @State private var didCleanLeftover = false
     @Environment(\.controlActiveState) private var controlActiveState
-
-    private var simulatorSelection: Binding<String?> {
-        Binding(
-            get: { controller.selectedUDID.isEmpty ? nil : controller.selectedUDID },
-            set: { if let udid = $0 { controller.selectDevice(udid) } }
-        )
-    }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -116,17 +147,7 @@ struct RootView: View {
                 OnboardingView(settings: settings)
             }
         }
-        .onAppear {
-            controller.refresh()
-            camera.refresh()
-        }
-        .onChange(of: controller.devices) { _, devices in
-            let udids = devices.map(\.udid)
-            autoMode.syncDevices(udids)
-            if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
-            // Auto-inject is the app's only job — turn it on as soon as a simulator is available.
-            if !autoMode.isActive, !udids.isEmpty { enableAutoInject() }
-        }
+        .onAppear { camera.refresh() }
     }
 
     private var mainContent: some View {
@@ -135,11 +156,8 @@ struct RootView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
-            VStack(spacing: 10) {
-                sourcePicker
-                previewDeviceRow
-            }
-            .padding(.horizontal, 16)
+            sourcePicker
+                .padding(.horizontal, 16)
 
             statusRow
             footer
@@ -160,11 +178,6 @@ struct RootView: View {
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
-    }
-
-    private func enableAutoInject() {
-        autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
-                        deviceUDIDs: controller.devices.map(\.udid), fps: settings.autoFps)
     }
 
     private func deviceChanged() {
@@ -194,27 +207,49 @@ struct RootView: View {
         preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
-    // MARK: Auto-inject status (always on — the app's only job)
+    // MARK: Running status (the app injecting = running)
 
     private var statusRow: some View {
-        HStack(spacing: 7) {
-            Circle().fill(statusColor).frame(width: 7, height: 7)
-            Text(statusText).font(.caption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.tail)
+        HStack(spacing: 9) {
+            StatusDot(color: statusColor, pulsing: autoMode.isActive && !reduceMotion)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(statusTitle).font(.footnote.weight(.semibold))
+                Text(statusDetail).font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
             Spacer()
+            if autoMode.isActive, controller.devices.count > 0 {
+                Text("\(controller.devices.count)").font(.caption.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(.green.opacity(0.18), in: .capsule)
+                    .foregroundStyle(.green)
+            }
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
         .padding(.horizontal, 16)
+        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: autoMode.isActive)
     }
 
     private var statusColor: Color {
         if autoMode.lastError != nil { return .red }
-        return autoMode.isActive ? .green : .secondary
+        return autoMode.isActive ? .green : .orange
     }
 
-    private var statusText: String {
+    private var statusTitle: String {
+        if autoMode.lastError != nil { return "Needs attention" }
+        if autoMode.isActive { return "Running" }
+        return controller.devices.isEmpty ? "Waiting" : "Connecting…"
+    }
+
+    private var statusDetail: String {
         if let error = autoMode.lastError { return error }
-        if controller.devices.isEmpty { return "Boot a simulator to start injecting" }
-        return autoMode.isActive ? "Active — every app you open gets the camera" : "Starting…"
+        if autoMode.isActive {
+            let names = controller.devices.map(\.name)
+            if names.isEmpty { return "Injecting the camera" }
+            return names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) simulators injected"
+        }
+        return controller.devices.isEmpty ? "Boot a simulator to start" : "Starting injection…"
     }
 
     // MARK: Source (icon picker + per-kind input with paste)
@@ -228,7 +263,11 @@ struct RootView: View {
                     }
                 }
             }
+            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: controller.sourceKind)
+
             sourceDetail
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: controller.sourceKind)
         }
     }
 
@@ -297,35 +336,40 @@ struct RootView: View {
         controller.videoPath.isEmpty ? "No file chosen" : (controller.videoPath as NSString).lastPathComponent
     }
 
-    // MARK: Preview device (only sets the preview + bezel aspect — every sim is injected)
-
-    private var previewDeviceRow: some View {
-        GroupBox {
-            HStack(spacing: 8) {
-                Image(systemName: "iphone.gen3").foregroundStyle(.secondary)
-                Text("Preview on").font(.callout)
-                Spacer()
-                Picker("Preview device", selection: simulatorSelection) {
-                    if controller.devices.isEmpty { Text("No simulators").tag(String?.none) }
-                    ForEach(controller.devices, id: \.udid) { device in
-                        Text(device.name).tag(String?.some(device.udid))
-                    }
-                }
-                .labelsHidden().fixedSize()
-                .disabled(controller.devices.isEmpty)
-                Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless).help("Refresh booted simulators")
-            }
-        }
-        .help("Sets which device's screen shape the preview shows. All booted simulators are injected automatically.")
-    }
-
     /// Invisible ⌘V handler that pastes into the active source (image/video). QR's field handles paste itself.
     private var pasteShortcut: some View {
         Button("") { controller.pasteFromClipboard() }
             .keyboardShortcut("v", modifiers: .command)
             .opacity(0).frame(width: 0, height: 0)
             .disabled(controller.sourceKind == .webcam || controller.sourceKind == .qr)
+    }
+}
+
+/// A status dot with a soft expanding pulse when the app is actively injecting.
+struct StatusDot: View {
+    let color: Color
+    let pulsing: Bool
+    @State private var expand = false
+
+    var body: some View {
+        ZStack {
+            if pulsing {
+                Circle().fill(color.opacity(0.35))
+                    .frame(width: 9, height: 9)
+                    .scaleEffect(expand ? 2.4 : 1)
+                    .opacity(expand ? 0 : 0.7)
+            }
+            Circle().fill(color).frame(width: 9, height: 9)
+        }
+        .frame(width: 22, height: 22)
+        .onAppear { restart() }
+        .onChange(of: pulsing) { _, _ in restart() }
+    }
+
+    private func restart() {
+        expand = false
+        guard pulsing else { return }
+        withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { expand = true }
     }
 }
 

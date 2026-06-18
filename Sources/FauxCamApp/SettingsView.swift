@@ -30,6 +30,20 @@ struct SettingsView: View {
                 Text("FauxCam injects the fake camera into every app in your booted simulators. It's the app's only job — to stop, uninstall below.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section {
+                Picker("Preview device", selection: previewDeviceBinding) {
+                    if controller.devices.isEmpty { Text("No simulators").tag(String?.none) }
+                    ForEach(controller.devices, id: \.udid) { device in
+                        Text(device.name).tag(String?.some(device.udid))
+                    }
+                }
+                .disabled(controller.devices.isEmpty)
+            } header: {
+                Text("Preview")
+            } footer: {
+                Text("Which device's screen shape the menu preview shows. Every booted simulator is injected at its own aspect regardless.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Startup") {
                 Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
             }
@@ -49,6 +63,13 @@ struct SettingsView: View {
         } message: {
             Text("This cleans up all injection and moves the app to the Trash. Relaunch your simulator apps afterwards for a clean state.")
         }
+    }
+
+    private var previewDeviceBinding: Binding<String?> {
+        Binding(
+            get: { controller.selectedUDID.isEmpty ? nil : controller.selectedUDID },
+            set: { if let udid = $0 { controller.selectDevice(udid) } }
+        )
     }
 
     // MARK: About
