@@ -435,10 +435,11 @@ struct PreviewLayerSmoke {
     private static let fixtureBundleIdentifier =
         ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
     private static let registeredNeedle = "preview layer registered"
+    private static let deliveredNeedle = "preview frame enqueued"
     private static let deadlineSeconds: TimeInterval = 25
 
-    @Test("injected guest registers an app-owned AVCaptureVideoPreviewLayer (preview-only app)")
-    func injectedGuestRegistersAppPreviewLayer() throws {
+    @Test("injected guest registers a preview layer and feeds frames to it (preview-only app)")
+    func injectedGuestFeedsAppPreviewLayer() throws {
         let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
         SimulatorFixtureHarness.buildAndInstall(onto: deviceIdentifier)
         let captured = SimulatorFixtureHarness.launchAndCapture(
@@ -448,8 +449,9 @@ struct PreviewLayerSmoke {
                 "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES": RepositoryLayout.distributedDylib.path,
                 "SIMCTL_CHILD_FAUXCAM_PREVIEW_PROBE": "1"
             ],
-            untilContains: Self.registeredNeedle, deadlineSeconds: Self.deadlineSeconds)
+            untilContains: Self.deliveredNeedle, deadlineSeconds: Self.deadlineSeconds)
         #expect(captured.contains(Self.registeredNeedle), Comment(rawValue: "expected preview layer registration; captured:\n\(captured)"))
+        #expect(captured.contains(Self.deliveredNeedle), Comment(rawValue: "expected a frame enqueued to the preview layer; captured:\n\(captured)"))
     }
 }
 

@@ -67,14 +67,16 @@ static os_log_t fauxSessionLog(void) {
         [preview addSublayer:self.displayLayer];
     }
     self.displayLayer.frame = preview.bounds;
+    if ([preview respondsToSelector:@selector(videoGravity)]) {
+        AVLayerVideoGravity gravity = [(AVCaptureVideoPreviewLayer *)preview videoGravity];
+        if (gravity && ![self.displayLayer.videoGravity isEqualToString:gravity]) {
+            self.displayLayer.videoGravity = gravity;
+        }
+    }
     if (self.displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
         [self.displayLayer flush];
     }
-    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, YES);
-    if (attachments && CFArrayGetCount(attachments) > 0) {
-        CFMutableDictionaryRef attachment = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
-        CFDictionarySetValue(attachment, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
-    }
+    if (!self.displayLayer.isReadyForMoreMediaData) return;
     [self.displayLayer enqueueSampleBuffer:sampleBuffer];
 }
 @end
@@ -87,6 +89,7 @@ static os_log_t fauxSessionLog(void) {
 @property (nonatomic, strong) id captureOutput;
 @property (nonatomic, strong) id captureConnection;
 - (void)start;
+- (void)startIfReady;
 - (void)stop;
 - (void)registerPreviewLayer:(CALayer *)previewLayer;
 @end
@@ -100,6 +103,8 @@ static os_log_t fauxSessionLog(void) {
     uint32_t _sequence;
     faux_frame_client *_frameClient;
     BOOL _usesHostSocket;
+    BOOL _startRequested;
+    BOOL _loggedPreviewDelivery;
     NSMutableArray<FauxPreviewTarget *> *_previewTargets;
 }
 
@@ -113,10 +118,22 @@ static os_log_t fauxSessionLog(void) {
         [_previewTargets addObject:[[FauxPreviewTarget alloc] initWithPreviewLayer:previewLayer]];
         os_log(fauxSessionLog(), "preview layer registered total=%lu", (unsigned long)_previewTargets.count);
     }
+    [self startIfReady];
+}
+
+- (BOOL)hasConsumer {
+    if (self.sampleBufferDelegate && self.deliveryQueue) return YES;
+    @synchronized(self) { return _previewTargets.count > 0; }
 }
 
 - (void)start {
-    if (_timer) return;
+    _startRequested = YES;
+    [self startIfReady];
+}
+
+- (void)startIfReady {
+    if (_timer || !_startRequested || ![self hasConsumer]) return;
+
     if (_sourcePixels) { free(_sourcePixels); _sourcePixels = NULL; }
     if (_frameClient) { faux_frame_client_destroy(_frameClient); _frameClient = NULL; }
     _usesHostSocket = NO;
@@ -139,9 +156,22 @@ static os_log_t fauxSessionLog(void) {
 }
 
 - (void)stop {
+    _startRequested = NO;
     if (_timer) {
         dispatch_source_cancel(_timer);
         _timer = nil;
+    }
+    NSArray<FauxPreviewTarget *> *targets;
+    @synchronized(self) {
+        targets = [_previewTargets copy];
+        [_previewTargets removeAllObjects];
+    }
+    if (targets.count > 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (FauxPreviewTarget *target in targets) {
+                [target.displayLayer removeFromSuperlayer];
+            }
+        });
     }
 }
 
@@ -220,6 +250,20 @@ static os_log_t fauxSessionLog(void) {
 
 - (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     _sequence++;
+    NSArray<FauxPreviewTarget *> *previewTargets;
+    @synchronized(self) {
+        previewTargets = _previewTargets.count > 0 ? [_previewTargets copy] : nil;
+    }
+    if (previewTargets) {
+        // Set the display-immediately attachment once on the pump thread, before any dispatch,
+        // so the buffer shared with the data-output delegate is never mutated cross-queue.
+        CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, YES);
+        if (attachments && CFArrayGetCount(attachments) > 0) {
+            CFMutableDictionaryRef attachment = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+            CFDictionarySetValue(attachment, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+        }
+    }
+
     id delegate = self.sampleBufferDelegate;
     dispatch_queue_t queue = self.deliveryQueue;
     if (delegate && queue) {
@@ -233,14 +277,14 @@ static os_log_t fauxSessionLog(void) {
             CFRelease(sampleBuffer);
         });
     }
-    [self deliverToPreviewLayers:sampleBuffer];
+
+    if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets];
 }
 
-- (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer {
-    NSArray<FauxPreviewTarget *> *targets;
-    @synchronized(self) {
-        if (_previewTargets.count == 0) return;
-        targets = [_previewTargets copy];
+- (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer targets:(NSArray<FauxPreviewTarget *> *)targets {
+    if (!_loggedPreviewDelivery) {
+        _loggedPreviewDelivery = YES;
+        os_log(fauxSessionLog(), "preview frame enqueued");
     }
     CFRetain(sampleBuffer);
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -328,6 +372,7 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
         pump.sampleBufferDelegate = objc_getAssociatedObject(output, kOutputDelegateKey);
         pump.deliveryQueue = objc_getAssociatedObject(output, kOutputQueueKey);
         objc_setAssociatedObject(output, kOutputDelegateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [pump startIfReady];
         return;
     }
     if (fauxOriginalAddOutput) {
