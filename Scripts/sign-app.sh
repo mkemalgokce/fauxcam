@@ -36,21 +36,36 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>FauxCam</string>
+  <key>CFBundleDisplayName</key><string>FauxCam</string>
   <key>CFBundleIdentifier</key><string>com.fauxcam.app</string>
   <key>CFBundleExecutable</key><string>FauxCam</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSCameraUsageDescription</key><string>FauxCam previews your camera and streams it as a fake camera into the iOS Simulator.</string>
 </dict>
 </plist>
 PLIST
 
+cat > "$ROOT/dist/FauxCam.entitlements" <<'ENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.device.camera</key><true/>
+</dict>
+</plist>
+ENT
+
 echo "==> Code-signing with identity: $IDENTITY"
 codesign --force --options runtime --sign "$IDENTITY" "$STAGE/Contents/Resources/libFaux.dylib"
-codesign --force --options runtime --sign "$IDENTITY" "$STAGE"
+codesign --force --options runtime --entitlements "$ROOT/dist/FauxCam.entitlements" --sign "$IDENTITY" "$STAGE"
 codesign --verify --deep --strict "$STAGE"
-echo "==> Signed bundle at $STAGE"
+codesign -d --entitlements - "$STAGE" 2>&1 | grep -q "device.camera" || { echo "ERROR: camera entitlement missing"; exit 1; }
+/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$STAGE/Contents/Info.plist" >/dev/null
+echo "==> Signed bundle at $STAGE (hardened runtime + camera entitlement)"
 
 if [[ "$IDENTITY" == "-" ]]; then
   cat <<'NOTE'

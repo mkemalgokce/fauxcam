@@ -17,7 +17,7 @@ public final class FauxRunSession: @unchecked Sendable {
         }
     }
 
-    public struct Configuration {
+    public struct Configuration: Sendable {
         public let dylibPath: String
         public let socketPath: String
 
