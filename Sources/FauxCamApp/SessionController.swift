@@ -5,12 +5,29 @@ import FauxAdapters
 
 @MainActor
 final class SessionController: ObservableObject {
+    enum SourceKind: String, CaseIterable, Identifiable {
+        case image, webcam, video, qr
+        var id: String { rawValue }
+        var needsDetail: Bool { self == .video || self == .qr }
+        var detailPrompt: String { self == .video ? "Video file path" : "QR text" }
+    }
+
     @Published var devices: [SimDevice] = []
     @Published var selectedUDID: String = ""
     @Published var bundleIdentifier: String = ""
-    @Published var sourceSpec: String = "image"
+    @Published var sourceKind: SourceKind = .image
+    @Published var sourceDetail: String = ""
     @Published var isRunning: Bool = false
     @Published var status: String = ""
+
+    var resolvedSourceSpec: String {
+        switch sourceKind {
+        case .image: return "image"
+        case .webcam: return "webcam"
+        case .video: return "video:\(sourceDetail)"
+        case .qr: return "qr:\(sourceDetail)"
+        }
+    }
 
     private let deviceProvider: SimDeviceProviding
     private let session: FauxRunSession
@@ -44,10 +61,11 @@ final class SessionController: ObservableObject {
             dylibPath: dylibPath,
             socketPath: "/private/tmp/com.fauxcam/app-\(device.udid).sock"
         )
+        let spec = resolvedSourceSpec
         do {
-            try session.start(sourceSpec: sourceSpec, device: device, bundleIdentifier: bundleIdentifier, configuration: configuration)
+            try session.start(sourceSpec: spec, device: device, bundleIdentifier: bundleIdentifier, configuration: configuration)
             isRunning = true
-            status = "Serving \(sourceSpec) to \(device.name)."
+            status = "Serving \(spec) to \(device.name)."
         } catch {
             status = "Failed: \(error)"
         }
@@ -60,7 +78,11 @@ final class SessionController: ObservableObject {
     }
 
     nonisolated static func defaultDylibPath() -> String {
-        URL(fileURLWithPath: "dist/libFaux.dylib", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+        if let bundled = Bundle.main.url(forResource: "libFaux", withExtension: "dylib"),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled.path
+        }
+        return URL(fileURLWithPath: "dist/libFaux.dylib", relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
             .standardizedFileURL.path
     }
 

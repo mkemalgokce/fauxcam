@@ -38,6 +38,18 @@ private func decodeQR(from frame: Frame) -> String? {
     #expect(decodeQR(from: frame) == payload)
 }
 
+@Test func qrSourceScansAtTheNonSquareGuestDemand() throws {
+    let payload = "FAUXCAM-1280x720"
+    let source = QRCodeSource(text: payload, clock: { 0 })
+
+    let landscape = try source.frame(satisfying: Demand(position: .back, requestedWidth: 1280, requestedHeight: 720))
+    #expect(landscape.isWellFormed)
+    #expect(decodeQR(from: landscape) == payload)
+
+    let portrait = try source.frame(satisfying: Demand(position: .front, requestedWidth: 720, requestedHeight: 1280))
+    #expect(decodeQR(from: portrait) == payload)
+}
+
 @Test func factoryMakesQRCodeSourceForQRSpec() {
     #expect(FrameSourceFactory().make("qr:hello") is QRCodeSource)
 }

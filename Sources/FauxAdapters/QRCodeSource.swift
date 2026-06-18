@@ -4,7 +4,7 @@ import CoreImage.CIFilterBuiltins
 import FauxDomain
 
 public final class QRCodeSource: FrameSource, @unchecked Sendable {
-    private static let quietZoneFraction: CGFloat = 0.8
+    private static let qrContentFraction: CGFloat = 0.8
 
     private let payload: Data
     private let scaler = PixelBufferScaler()
@@ -37,7 +37,7 @@ public final class QRCodeSource: FrameSource, @unchecked Sendable {
         filter.correctionLevel = "M"
         guard let qr = filter.outputImage, qr.extent.width > 0 else { return white }
 
-        let side = CGFloat(min(width, height)) * Self.quietZoneFraction
+        let side = CGFloat(min(width, height)) * Self.qrContentFraction
         let scale = side / qr.extent.width
         let offsetX = (CGFloat(width) - qr.extent.width * scale) / 2
         let offsetY = (CGFloat(height) - qr.extent.height * scale) / 2

@@ -49,11 +49,18 @@ struct FauxCamMenu: View {
             TextField("App bundle id", text: $controller.bundleIdentifier)
                 .textFieldStyle(.roundedBorder)
 
-            Picker("Source", selection: $controller.sourceSpec) {
-                Text("Image").tag("image")
-                Text("Webcam").tag("webcam")
+            Picker("Source", selection: $controller.sourceKind) {
+                Text("Image").tag(SessionController.SourceKind.image)
+                Text("Webcam").tag(SessionController.SourceKind.webcam)
+                Text("Video").tag(SessionController.SourceKind.video)
+                Text("QR").tag(SessionController.SourceKind.qr)
             }
             .pickerStyle(.segmented)
+
+            if controller.sourceKind.needsDetail {
+                TextField(controller.sourceKind.detailPrompt, text: $controller.sourceDetail)
+                    .textFieldStyle(.roundedBorder)
+            }
 
             HStack {
                 if controller.isRunning {

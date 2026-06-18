@@ -111,11 +111,11 @@ static id fauxDeviceActiveFormat(id self, SEL _cmd) { return fauxSharedFormat();
 
 // MARK: - Fake device construction
 
-// TODO: The fake device is a real AVCaptureDevice subclass built without the
-// designated initializer; it is safe for camera DISCOVERY (the selectors below
-// plus NSObject defaults), but USING it (lockForConfiguration:, session wiring)
-// reaches inherited IMPs over zeroed ivars and is only made safe in Phase 2,
-// which intercepts AVCaptureSession/AVCaptureDeviceInput before those run.
+/// Builds the fake AVCaptureDevice subclass used for camera discovery. The instance
+/// is created without AVCaptureDevice's designated initializer, so only the discovery
+/// selectors (plus NSObject defaults) are valid on it; SessionSwizzle intercepts every
+/// AVCaptureSession / AVCaptureDeviceInput usage path, so the zeroed-ivar device is
+/// never driven by AVFoundation directly.
 static Class fauxRegisterDeviceClass(NSString *name) {
     Class existing = objc_getClass(name.UTF8String);
     if (existing) return existing;

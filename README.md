@@ -8,7 +8,7 @@ FauxCam injects a small Objective-C dylib (`libFaux.dylib`) into the simulated a
 
 ```sh
 ./Scripts/build-dylib.sh      # builds dist/libFaux.dylib (fat arm64+x86_64, iphonesimulator, ad-hoc signed)
-swift build                   # builds the `faux` CLI and the FauxCam menubar app
+swift build                   # builds the `faux` CLI and the `FauxCamApp` menubar app
 ```
 
 Verify the guest dylib is loadable:
@@ -69,4 +69,4 @@ Unit tests run framework-free with fakes; integration tests inject the guest int
 
 ## Distribution
 
-`./Scripts/sign-app.sh [identity]` builds and code-signs the menubar app (ad-hoc by default; pass a Developer ID for distribution). See the script for the notarization steps.
+`./Scripts/sign-app.sh [identity]` builds and code-signs the `FauxCamApp` menubar app as `dist/FauxCam.app` (ad-hoc by default; pass a Developer ID for distribution). The guest dylib is bundled into the app's `Contents/Resources` and resolved via `Bundle.main` at runtime. See the script for the notarization steps.
