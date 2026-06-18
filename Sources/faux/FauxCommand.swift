@@ -7,15 +7,19 @@ struct FauxCommand {
         static let passed: Int32 = 0
         static let auditFailed: Int32 = 1
         static let inspectionError: Int32 = 2
+        static let serveFailed: Int32 = 3
         static let usageError: Int32 = 64
     }
 
     private static let defaultDylibPath = "dist/libFaux.dylib"
+    private static let defaultSocketPath = "/private/tmp/com.fauxcam/faux.sock"
 
     private let doctor: DoctorService
+    private let serverFactory: (String) throws -> FauxServer
 
-    init(doctor: DoctorService) {
+    init(doctor: DoctorService, serverFactory: @escaping (String) throws -> FauxServer) {
         self.doctor = doctor
+        self.serverFactory = serverFactory
     }
 
     func run(arguments: [String]) -> Int32 {
@@ -23,8 +27,20 @@ struct FauxCommand {
         switch verb {
         case "doctor":
             return runDoctor(path: arguments.dropFirst().first ?? Self.defaultDylibPath)
+        case "serve":
+            return runServe(socketPath: arguments.dropFirst().first ?? Self.defaultSocketPath)
         default:
             return usage()
+        }
+    }
+
+    private func runServe(socketPath: String) -> Int32 {
+        do {
+            try serverFactory(socketPath).run()
+            return ExitCode.passed
+        } catch {
+            writeError("faux serve: FAIL — \(error)\n")
+            return ExitCode.serveFailed
         }
     }
 
@@ -61,7 +77,7 @@ struct FauxCommand {
     }
 
     private func usage() -> Int32 {
-        print("usage: faux doctor [path-to-dylib]")
+        print("usage: faux <doctor [path-to-dylib] | serve [socket-path]>")
         return ExitCode.usageError
     }
 
