@@ -19,8 +19,8 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 |---|-------|-------|--------|
 | 0 | Loader spike | guest dylib + faux doctor + fixture + live-injection proof | ✅ DONE (merged 3fa017d) |
 | 1 | Fake discovery | AVSwizzle vends fake front/back `AVCaptureDevice`; `AVCaptureDeviceDiscoverySession`/`default`/`devices` return them; authorization → Authorized. No frames. | ✅ DONE (merged b5671ae; 16 tests, live discovery proven) |
-| 2 | Static frame E2E | `faux_wire.h` framing + `UnixSocketTransport` + `FrameServer` (host) + `FrameClient` + `BufferFactory` (guest): a `CMSampleBuffer` from a host-pushed BGRA image reaches `captureOutput:didOutputSampleBuffer:`; preview layer shows it. | ▶ IN PROGRESS |
-| 3 | Multi-source | host `AVAssetVideoSource` (video file) + `AVCaptureWebcamSource` (Mac camera/Continuity); front + back streams. | ⬜ TODO |
+| 2 | Static frame E2E | `faux_wire.h` framing + `UnixSocketTransport` + `FrameServer` (host) + `FrameClient` + `BufferFactory` (guest): a `CMSampleBuffer` from a host-pushed BGRA image reaches `captureOutput:didOutputSampleBuffer:`. | ✅ DONE (merged ba637a9; host→socket→guest→delegate proven, 27 tests, review fixed) |
+| 3 | Multi-source | host `VideoFileSource` (AVAssetReader, video file → BGRA frames) + `WebcamSource` (AVCaptureSession Mac camera/Continuity) as new `FrameSource`s; `faux serve --source`. Guest unchanged. | ▶ IN PROGRESS |
 | 4 | Host UX | `SimWatcher` (CoreSimulator notify) + SwiftUI menubar app + `faux` CLI (`run`/`list`/`doctor`). | ⬜ TODO |
 | 5 | QR + polish | host `CoreImageQRSource` + guest `AVCaptureMetadataOutput` hook; docs, notarization, README. | ⬜ TODO |
 | 6 | Fig layer | `FigCaptureSession` hooks for low-level capture clients (RN/Flutter/WebRTC). | ⬜ TODO |
