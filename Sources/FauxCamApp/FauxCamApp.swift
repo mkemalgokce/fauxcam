@@ -52,7 +52,6 @@ struct RootView: View {
     @ObservedObject var controller: SessionController
     @ObservedObject var selfView: SelfViewModel
     @ObservedObject var appIcons: AppIconStore
-    @AppStorage("fauxcam.seenIntro") private var seenIntro = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     private var simulatorSelection: Binding<String?> {
@@ -63,16 +62,15 @@ struct RootView: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            if !seenIntro { introBanner }
-
+        VStack(spacing: 12) {
             ViewfinderCard(controller: controller, selfView: selfView)
                 .padding(.horizontal, 16)
-                .padding(.top, seenIntro ? 16 : 0)
+                .padding(.top, 16)
 
             VStack(spacing: 12) {
                 destinationSection
                 sourceSection
+                resolutionSection
             }
             .padding(.horizontal, 16)
 
@@ -92,20 +90,7 @@ struct RootView: View {
         }
     }
 
-    private var introBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lightbulb.fill").foregroundStyle(.yellow)
-            Text("Pick a simulator, a target app, and a source — then **Start**.")
-            Spacer()
-            Button { withAnimation { seenIntro = true } } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).help("Dismiss")
-        }
-        .font(.caption)
-        .padding(10)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-    }
+    // MARK: Destination
 
     private var destinationSection: some View {
         GroupBox {
@@ -141,12 +126,8 @@ struct RootView: View {
                     } label: {
                         targetAppLabel
                     }
-                    .menuStyle(.button)
-                    .fixedSize()
+                    .menuStyle(.button).fixedSize()
                     .disabled(controller.installedApps.isEmpty)
-                }
-                if controller.devices.isEmpty {
-                    hint("No booted simulators. Open Simulator or run from Xcode, then Refresh.")
                 }
             }
         }
@@ -169,10 +150,12 @@ struct RootView: View {
         return controller.installedApps.isEmpty ? "No user apps" : "Select an app"
     }
 
+    // MARK: Source
+
     private var sourceSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Picker("Source", selection: $controller.sourceKind.animation(.smooth(duration: 0.25))) {
+                Picker("Source", selection: $controller.sourceKind) {
                     ForEach(SessionController.SourceKind.allCases) { kind in
                         Text(kind.shortTitle).tag(kind)
                     }
@@ -181,28 +164,61 @@ struct RootView: View {
 
                 if controller.sourceKind.needsDetail {
                     SourceDetailRow(controller: controller)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                hint(controller.sourceKind.footerHint)
-
-                Divider()
-                HStack {
-                    Label("Resolution", systemImage: "rectangle.dashed")
-                    Spacer()
-                    Picker("Resolution", selection: $controller.resolution) {
-                        ForEach(SessionController.Resolution.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    .disabled(controller.isRunning)
-                    .help("Frame size sent to the app. Set before Start.")
-                }
+                Text(controller.sourceKind.footerHint)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func hint(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+    // MARK: Resolution
+
+    private var resolutionSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Resolution", systemImage: "aspectratio")
+                    Spacer()
+                    Text("\(controller.width) × \(controller.height)")
+                        .font(.callout.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                resolutionSlider("Width", binding: widthBinding)
+                resolutionSlider("Height", binding: heightBinding)
+                HStack(spacing: 6) {
+                    presetButton(1280, 720)
+                    presetButton(1920, 1080)
+                    presetButton(720, 1280)
+                    Spacer()
+                }
+            }
+            .disabled(controller.isRunning)
+            .help("Frame size sent to the app. Tune Width and Height to fit the screen. Set before Start.")
+        }
+    }
+
+    private func resolutionSlider(_ axis: String, binding: Binding<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text(axis).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+            Slider(value: binding, in: Double(SessionController.minDimension)...Double(SessionController.maxDimension), step: 16)
+        }
+    }
+
+    private func presetButton(_ width: Int, _ height: Int) -> some View {
+        Button("\(width)×\(height)") { controller.width = width; controller.height = height }
+            .buttonStyle(.bordered).controlSize(.small).monospacedDigit()
+    }
+
+    private var widthBinding: Binding<Double> {
+        Binding(get: { Double(controller.width) }, set: { controller.width = snap($0) })
+    }
+    private var heightBinding: Binding<Double> {
+        Binding(get: { Double(controller.height) }, set: { controller.height = snap($0) })
+    }
+    private func snap(_ value: Double) -> Int {
+        let stepped = (Int(value.rounded()) / 16) * 16
+        return max(SessionController.minDimension, min(SessionController.maxDimension, stepped))
     }
 
     private func syncSelfView() {
@@ -225,22 +241,16 @@ struct ViewfinderCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
             content
-                .id(controller.sourceKind)
-                .transition(.opacity)
         }
         .frame(height: 188)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator, lineWidth: 1))
         .overlay(alignment: .topLeading) {
             if controller.isRunning {
-                LiveBadge()
-                    .padding(10)
+                LiveBadge().padding(10)
                     .help("Streaming frames to the app. Press Stop to tear down.")
-                    .transition(.scale.combined(with: .opacity))
             }
         }
-        .animation(.smooth(duration: 0.28), value: controller.sourceKind)
-        .animation(.snappy, value: controller.isRunning)
     }
 
     @ViewBuilder private var content: some View {
@@ -290,6 +300,7 @@ struct ImageViewfinder: View {
                 ProgressView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: controller.imagePath) { await reload() }
     }
 
@@ -356,16 +367,13 @@ struct WebcamViewfinder: View {
 struct VideoViewfinder: View {
     @ObservedObject var controller: SessionController
     var body: some View {
-        if controller.videoPath.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "film.stack").font(.system(size: 30, weight: .light)).foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            Image(systemName: "film").font(.system(size: 30, weight: .light)).foregroundStyle(.secondary)
+            if controller.videoPath.isEmpty {
                 Button { controller.chooseVideo() } label: { Label("Choose Video", systemImage: "plus") }
                     .buttonStyle(.glass).controlSize(.small)
                 Text("MP4 or MOV. It loops automatically.").font(.caption2).foregroundStyle(.secondary)
-            }
-        } else {
-            VStack(spacing: 8) {
-                Image(systemName: "film").font(.system(size: 30)).foregroundStyle(.secondary)
+            } else {
                 Text((controller.videoPath as NSString).lastPathComponent)
                     .font(.caption).lineLimit(1).truncationMode(.middle).padding(.horizontal, 24)
                 Button { controller.chooseVideo() } label: { Label("Change", systemImage: "film") }
@@ -400,7 +408,7 @@ struct QRViewfinder: View {
 struct LiveBadge: View {
     var body: some View {
         HStack(spacing: 4) {
-            Circle().fill(.red).frame(width: 6, height: 6)
+            Circle().fill(.secondary).frame(width: 6, height: 6)
             Text("LIVE").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -461,12 +469,7 @@ struct ActionBar: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 6) {
-                if controller.isRunning {
-                    Circle().fill(.green).frame(width: 7, height: 7)
-                } else if controller.isError {
-                    Circle().fill(.red).frame(width: 7, height: 7)
-                }
+            HStack {
                 Text(statusText)
                     .font(.footnote)
                     .foregroundStyle(controller.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
@@ -478,21 +481,22 @@ struct ActionBar: View {
                 controller.isRunning ? controller.stop() : controller.start()
             } label: {
                 HStack(spacing: 6) {
-                    if controller.isBusy { ProgressView().controlSize(.small) }
+                    if controller.isBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: controller.isRunning ? "stop.fill" : "play.fill")
+                    }
                     Text(controller.isRunning ? "Stop" : "Start").fontWeight(.semibold)
                 }
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glass)
-            .tint(controller.isRunning ? .red : .accentColor)
             .controlSize(.large)
             .disabled(!controller.canStart && !controller.isRunning)
             .help(controller.isRunning
                   ? "Stop streaming and tear down."
                   : "Relaunches the target app to inject FauxCam as its camera.")
-            .animation(.snappy, value: controller.isRunning)
         }
         .padding(14)
-        .animation(.snappy, value: controller.isBusy)
     }
 }

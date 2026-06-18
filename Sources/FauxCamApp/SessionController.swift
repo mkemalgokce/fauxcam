@@ -51,34 +51,12 @@ final class SessionController: ObservableObject {
     @Published var selectedUDID: String = ""
     @Published var installedApps: [InstalledApp] = []
     @Published var bundleIdentifier: String = ""
-    enum Resolution: String, CaseIterable, Identifiable {
-        case vga, hd720, hd1080
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .vga: return "480p"
-            case .hd720: return "720p"
-            case .hd1080: return "1080p"
-            }
-        }
-        var width: Int {
-            switch self {
-            case .vga: return 640
-            case .hd720: return 1280
-            case .hd1080: return 1920
-            }
-        }
-        var height: Int {
-            switch self {
-            case .vga: return 480
-            case .hd720: return 720
-            case .hd1080: return 1080
-            }
-        }
-    }
+    static let minDimension = 240
+    static let maxDimension = 1920
 
     @Published var sourceKind: SourceKind = .image
-    @Published var resolution: Resolution = .hd720
+    @Published var width: Int = 1280
+    @Published var height: Int = 720
     @Published var imagePath: String = ""
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
@@ -203,7 +181,7 @@ final class SessionController: ObservableObject {
         let bundle = bundleIdentifier
         let configuration = FauxRunSession.Configuration(
             dylibPath: dylibPath, socketPath: socketPath,
-            width: resolution.width, height: resolution.height
+            width: width, height: height
         )
         isBusy = true
         isError = false
