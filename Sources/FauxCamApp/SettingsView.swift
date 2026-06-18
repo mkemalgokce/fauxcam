@@ -8,28 +8,21 @@ struct SettingsView: View {
     @State private var confirmingUninstall = false
 
     var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            about.tabItem { Label("About", systemImage: "info.circle") }
-        }
-        .frame(width: 460, height: 380)
-    }
-
-    // MARK: General
-
-    private var general: some View {
         Form {
             Section {
-                LabeledContent("Auto-inject") {
-                    Label(autoMode.isActive ? "Active" : (autoMode.lastError == nil ? "Waiting for a simulator" : "Off"),
-                          systemImage: autoMode.isActive ? "bolt.fill" : "bolt.slash")
-                        .foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
-                        .font(.callout.weight(.medium))
+                HStack(spacing: 12) {
+                    appIcon
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("FauxCam").font(.headline)
+                        Label(statusLabel, systemImage: autoMode.isActive ? "bolt.fill" : "bolt.slash")
+                            .font(.caption).foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    }
+                    Spacer()
+                    Text("v\(appVersion)").font(.caption).foregroundStyle(.tertiary)
                 }
-            } footer: {
-                Text("FauxCam injects the fake camera into every app in your booted simulators. It's the app's only job — to stop, uninstall below.")
-                    .font(.caption).foregroundStyle(.secondary)
+                .padding(.vertical, 2)
             }
+
             Section {
                 Picker("Preview device", selection: previewDeviceBinding) {
                     if controller.devices.isEmpty { Text("No simulators").tag(String?.none) }
@@ -38,25 +31,29 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(controller.devices.isEmpty)
-            } header: {
-                Text("Preview")
+                Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
             } footer: {
-                Text("Which device's screen shape the menu preview shows. Every booted simulator is injected at its own aspect regardless.")
+                Text("Preview device only sets the menu preview's shape — every booted simulator is injected at its own aspect.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Startup") {
-                Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
+
+            Section("About") {
+                LabeledContent("Developer", value: "Mustafa Kemal Gökçe")
+                aboutLink("GitHub", systemImage: "chevron.left.forwardslash.chevron.right", url: "https://github.com/mkemalgokce")
+                aboutLink("Email", systemImage: "envelope", url: "mailto:mkemaldev@gmail.com")
             }
+
             Section {
                 Button(role: .destructive) { confirmingUninstall = true } label: {
                     Label("Uninstall FauxCam", systemImage: "trash")
                 }
             } footer: {
-                Text("Removes the launchd injection from every simulator, the login item, all preferences and sockets, then moves FauxCam to the Trash and quits.")
+                Text("Removes the injection from every simulator, the login item, all preferences and sockets, then moves FauxCam to the Trash and quits.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .frame(width: 380, height: 460)
         .confirmationDialog("Uninstall FauxCam and remove everything?", isPresented: $confirmingUninstall, titleVisibility: .visible) {
             Button("Uninstall", role: .destructive, action: onUninstall)
             Button("Cancel", role: .cancel) {}
@@ -65,36 +62,16 @@ struct SettingsView: View {
         }
     }
 
+    private var statusLabel: String {
+        if autoMode.lastError != nil { return "Needs attention" }
+        return autoMode.isActive ? "Running" : "Waiting for a simulator"
+    }
+
     private var previewDeviceBinding: Binding<String?> {
         Binding(
             get: { controller.selectedUDID.isEmpty ? nil : controller.selectedUDID },
             set: { if let udid = $0 { controller.selectDevice(udid) } }
         )
-    }
-
-    // MARK: About
-
-    private var about: some View {
-        VStack(spacing: 12) {
-            appIcon
-            Text("FauxCam").font(.title2.weight(.bold))
-            Text("Version \(appVersion)").font(.caption).foregroundStyle(.secondary)
-            Text("Feeds a custom camera — image, video, your Mac camera, or a QR code — into the iOS Simulator.")
-                .font(.callout).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 12)
-
-            Spacer()
-
-            VStack(spacing: 10) {
-                LabeledContent("Developer", value: "Mustafa Kemal Gökçe")
-                aboutLink("GitHub", systemImage: "chevron.left.forwardslash.chevron.right", url: "https://github.com/mkemalgokce")
-                aboutLink("Email", systemImage: "envelope", url: "mailto:mkemaldev@gmail.com")
-            }
-            .padding(14)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func aboutLink(_ title: String, systemImage: String, url: String) -> some View {
@@ -114,10 +91,10 @@ struct SettingsView: View {
     private var appIcon: some View {
         Group {
             if let url = Bundle.main.url(forResource: "appicon", withExtension: "png"), let image = NSImage(contentsOf: url) {
-                Image(nsImage: image).resizable().frame(width: 64, height: 64)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Image(nsImage: image).resizable().frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             } else {
-                Image(systemName: "camera.aperture").font(.system(size: 52)).foregroundStyle(.orange)
+                Image(systemName: "camera.aperture").font(.system(size: 38)).foregroundStyle(.orange)
             }
         }
     }

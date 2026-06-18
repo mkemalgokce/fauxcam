@@ -54,14 +54,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 460),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false
             )
             window.title = "FauxCam Settings"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView:
+            let hosting = NSHostingView(rootView:
                 SettingsView(settings: settings, autoMode: autoMode, controller: controller,
                              onUninstall: { [weak self] in self?.uninstall() }))
+            window.contentView = hosting
+            window.setContentSize(hosting.fittingSize)
             window.center()
             settingsWindow = window
         }
@@ -159,7 +161,8 @@ struct RootView: View {
             sourcePicker
                 .padding(.horizontal, 16)
 
-            bottomBar
+            statusPill
+            footer
         }
         .background { pasteShortcut }
         .onAppear {
@@ -194,9 +197,9 @@ struct RootView: View {
         preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
-    // MARK: Bottom bar (running status + actions)
+    // MARK: Bottom (running status pill + footer)
 
-    private var bottomBar: some View {
+    private var statusPill: some View {
         HStack(spacing: 8) {
             StatusDot(color: statusColor, pulsing: autoMode.isActive && !reduceMotion)
             Text(statusLine).font(.caption.weight(.medium)).foregroundStyle(.secondary)
@@ -207,15 +210,22 @@ struct RootView: View {
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(.green.opacity(0.2), in: .capsule).foregroundStyle(.green)
             }
-            Button { onOpenSettings() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(.borderless).help("Settings")
-            Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
-                .buttonStyle(.borderless).help("Quit FauxCam")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .rect(cornerRadius: 12))
-        .padding(.horizontal, 16).padding(.bottom, 12)
+        .padding(.horizontal, 16)
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: autoMode.isActive)
+    }
+
+    private var footer: some View {
+        HStack {
+            Button { onOpenSettings() } label: { Label("Settings", systemImage: "gearshape") }
+                .buttonStyle(.borderless).controlSize(.small)
+            Spacer()
+            Button("Quit") { NSApplication.shared.terminate(nil) }
+                .buttonStyle(.borderless).controlSize(.small)
+        }
+        .padding(.horizontal, 14).padding(.bottom, 10)
     }
 
     private var statusColor: Color {
@@ -297,18 +307,12 @@ struct RootView: View {
         switch selectedTab {
         case .media:
             HStack(spacing: 6) {
-                Button { controller.chooseMedia() } label: { Label("Choose…", systemImage: "folder") }
-                    .buttonStyle(.glass).controlSize(.small)
+                Button { controller.chooseMedia() } label: { Label("Choose", systemImage: "folder") }
+                    .buttonStyle(.glass).controlSize(.small).help("Pick an image or video file")
                 Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
                     .buttonStyle(.glass).controlSize(.small).help("Paste an image or video (⌘V)")
-                Text(mediaLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                Spacer()
-                if !controller.imagePath.isEmpty || !controller.videoPath.isEmpty {
-                    Button { controller.imagePath = ""; controller.videoPath = ""; controller.sourceKind = .image } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.borderless).help("Use the test image")
-                }
+                Spacer(minLength: 4)
+                mediaChip
             }
         case .camera:
             HStack {
@@ -319,12 +323,31 @@ struct RootView: View {
         case .qr:
             HStack(spacing: 6) {
                 TextField("Text or URL to encode", text: $controller.qrText).textFieldStyle(.roundedBorder)
-                Button { controller.pasteFromClipboard() } label: { Image(systemName: "clipboard") }
-                    .buttonStyle(.glass).controlSize(.small).help("Paste")
+                Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste from clipboard")
             }
         }
     }
 
+    /// Shows the current Media file (or "Test image") with an inline button to clear back to the default.
+    private var mediaChip: some View {
+        HStack(spacing: 5) {
+            Image(systemName: hasCustomMedia ? mediaIcon : "photo").font(.caption2).foregroundStyle(.secondary)
+            Text(mediaLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            if hasCustomMedia {
+                Button {
+                    controller.imagePath = ""; controller.videoPath = ""; controller.sourceKind = .image
+                } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(.tertiary).help("Reset to the test image")
+            }
+        }
+        .padding(.leading, 8).padding(.trailing, hasCustomMedia ? 5 : 8).padding(.vertical, 4)
+        .background(.quaternary, in: .capsule)
+        .frame(maxWidth: 168, alignment: .trailing)
+    }
+
+    private var hasCustomMedia: Bool { !controller.imagePath.isEmpty || !controller.videoPath.isEmpty }
+    private var mediaIcon: String { controller.sourceKind == .video ? "film" : "photo" }
     private var mediaLabel: String {
         if controller.sourceKind == .video, !controller.videoPath.isEmpty { return (controller.videoPath as NSString).lastPathComponent }
         if !controller.imagePath.isEmpty { return (controller.imagePath as NSString).lastPathComponent }

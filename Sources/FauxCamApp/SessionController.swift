@@ -147,24 +147,6 @@ final class SessionController: ObservableObject {
         }
     }
 
-    func chooseImage() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .gif, .bmp, .image]
-        panel.canChooseDirectories = false
-        panel.prompt = "Use Image"
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK, let url = panel.url { imagePath = url.path }
-    }
-
-    func chooseVideo() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
-        panel.canChooseDirectories = false
-        panel.prompt = "Use Video"
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK, let url = panel.url { videoPath = url.path }
-    }
-
     /// Paste for the active source: a copied image/video file or image (Media), or QR text. For Media,
     /// the pasted type decides whether it becomes an image or a video.
     func pasteFromClipboard() {
