@@ -42,6 +42,14 @@ BOOL FauxIsFakeDevice(id device) {
     return [uniqueID isEqualToString:kFauxBackUniqueID] || [uniqueID isEqualToString:kFauxFrontUniqueID];
 }
 
+long FauxFakeDevicePosition(id device) {
+    if (!device) return 0;
+    NSString *uniqueID = objc_getAssociatedObject(device, kFauxUniqueIDKey);
+    if ([uniqueID isEqualToString:kFauxFrontUniqueID]) return kFauxPositionFront;
+    if ([uniqueID isEqualToString:kFauxBackUniqueID]) return kFauxPositionBack;
+    return 0;
+}
+
 // MARK: - Fake device getters
 
 static NSInteger fauxPositionForDevice(id device) {

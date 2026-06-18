@@ -112,10 +112,11 @@ private final class CameraPreviewProbe {
     private var previewLayer: AVCaptureVideoPreviewLayer?
 
     func start() {
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        let position: AVCaptureDevice.Position = ProcessInfo.processInfo.environment["FAUXCAM_FRONT"] != nil ? .front : .back
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input) else {
-            os_log("preview setup failed: no back device or input", log: Self.log, type: .error)
+            os_log("preview setup failed: no device or input", log: Self.log, type: .error)
             return
         }
         session.addInput(input)

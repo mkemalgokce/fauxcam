@@ -49,7 +49,7 @@ static os_log_t fauxSessionLog(void) {
 @property (nonatomic, weak) CALayer *previewLayer;
 @property (nonatomic, strong) AVSampleBufferDisplayLayer *displayLayer;
 - (instancetype)initWithPreviewLayer:(CALayer *)previewLayer;
-- (void)enqueue:(CMSampleBufferRef)sampleBuffer;
+- (void)enqueue:(CMSampleBufferRef)sampleBuffer mirrored:(BOOL)mirrored;
 @end
 
 @implementation FauxPreviewTarget
@@ -63,13 +63,14 @@ static os_log_t fauxSessionLog(void) {
     return self;
 }
 
-- (void)enqueue:(CMSampleBufferRef)sampleBuffer {
+- (void)enqueue:(CMSampleBufferRef)sampleBuffer mirrored:(BOOL)mirrored {
     CALayer *preview = self.previewLayer;
     if (!preview) return;
     if (self.displayLayer.superlayer != preview) {
         [preview addSublayer:self.displayLayer];
     }
     self.displayLayer.frame = preview.bounds;
+    self.displayLayer.transform = mirrored ? CATransform3DMakeScale(-1, 1, 1) : CATransform3DIdentity;
     if ([preview respondsToSelector:@selector(videoGravity)]) {
         AVLayerVideoGravity gravity = [(AVCaptureVideoPreviewLayer *)preview videoGravity];
         if (gravity && ![self.displayLayer.videoGravity isEqualToString:gravity]) {
@@ -251,6 +252,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 @property (nonatomic, strong) dispatch_queue_t deliveryQueue;
 @property (nonatomic, strong) id captureOutput;
 @property (nonatomic, strong) id captureConnection;
+@property (nonatomic) BOOL frontCamera;
 - (void)start;
 - (void)startIfReady;
 - (void)stop;
@@ -522,19 +524,19 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         });
     }
 
-    if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets];
+    if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets mirrored:self.frontCamera];
     [self scanMetadataIfNeeded];
 }
 
-- (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer targets:(NSArray<FauxPreviewTarget *> *)targets {
+- (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer targets:(NSArray<FauxPreviewTarget *> *)targets mirrored:(BOOL)mirrored {
     if (!_loggedPreviewDelivery) {
         _loggedPreviewDelivery = YES;
-        os_log(fauxSessionLog(), "preview frame enqueued");
+        os_log(fauxSessionLog(), "preview frame enqueued mirrored=%d", mirrored);
     }
     CFRetain(sampleBuffer);
     dispatch_async(dispatch_get_main_queue(), ^{
         for (FauxPreviewTarget *target in targets) {
-            [target enqueue:sampleBuffer];
+            [target enqueue:sampleBuffer mirrored:mirrored];
         }
         CFRelease(sampleBuffer);
     });
@@ -658,7 +660,9 @@ static BOOL fauxInputIsFake(id input) {
 
 static void fauxSessionAddInput(id self, SEL _cmd, id input) {
     if (fauxInputIsFake(input)) {
-        (void)fauxPumpForSession(self);
+        FauxFramePump *pump = fauxPumpForSession(self);
+        id device = objc_getAssociatedObject(input, kFakeInputDeviceKey);
+        pump.frontCamera = (FauxFakeDevicePosition(device) == 2);
         return;
     }
     if (fauxOriginalAddInput) {
