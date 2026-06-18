@@ -133,7 +133,7 @@ struct RootView: View {
                         ForEach(controller.installedApps) { app in
                             Button { controller.bundleIdentifier = app.bundleIdentifier } label: {
                                 if let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
-                                    Image(nsImage: icon).resizable().frame(width: 16, height: 16)
+                                    Image(nsImage: icon)
                                 }
                                 Text(app.displayName)
                             }
@@ -152,7 +152,7 @@ struct RootView: View {
         HStack(spacing: 6) {
             AppIconThumbnail(icon: controller.selectedApp.flatMap {
                 appIcons.icon(bundleIdentifier: $0.bundleIdentifier, on: controller.selectedUDID)
-            }, side: 18)
+            }, side: AppIconStore.iconPointSize)
             Text(targetAppLabelText).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
             Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)

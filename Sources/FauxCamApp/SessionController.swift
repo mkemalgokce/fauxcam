@@ -97,19 +97,23 @@ final class SessionController: ObservableObject {
 
     private let deviceProvider: SimDeviceProviding
     private let appProvider: InstalledAppProviding
+    private let aspectProvider: DeviceScreenAspectProviding
     private let session: FauxRunSession
     private let dylibPath: String
     private var installedAppsGeneration = 0
-    private var aspectInFlight = false
+    private var aspectCache: [String: Double] = [:]
+    private var aspectInFlight: Set<String> = []
 
     init(
         deviceProvider: SimDeviceProviding = SimctlDeviceProvider(),
         appProvider: InstalledAppProviding = SimctlInstalledAppProvider(),
+        aspectProvider: DeviceScreenAspectProviding = SimctlScreenshotAspectProvider(),
         session: FauxRunSession = FauxRunSession(runSimctl: SessionController.runViaXcrun),
         dylibPath: String = SessionController.defaultDylibPath()
     ) {
         self.deviceProvider = deviceProvider
         self.appProvider = appProvider
+        self.aspectProvider = aspectProvider
         self.session = session
         self.dylibPath = dylibPath
         refresh()
@@ -163,7 +167,7 @@ final class SessionController: ObservableObject {
             selectedUDID = devices.first?.udid ?? ""
         }
         refreshInstalledApps()
-        refreshDeviceAspect()
+        refreshDeviceAspect(forceRefetch: true)
     }
 
     func selectDevice(_ udid: String) {
@@ -173,33 +177,28 @@ final class SessionController: ObservableObject {
         refreshDeviceAspect()
     }
 
-    func refreshDeviceAspect() {
+    /// Resolves the selected device's screen aspect. A per-UDID cache makes re-selecting a device
+    /// instant; `forceRefetch` re-reads (e.g. after the device is rotated). Each fetch applies only if
+    /// its device is still selected, so switching devices never shows a stale aspect.
+    func refreshDeviceAspect(forceRefetch: Bool = false) {
         let udid = selectedUDID
-        guard !udid.isEmpty, !aspectInFlight else { return }
-        aspectInFlight = true
+        guard !udid.isEmpty else { return }
+        if !forceRefetch, let cached = aspectCache[udid] {
+            deviceAspect = cached
+            return
+        }
+        guard !aspectInFlight.contains(udid) else { return }
+        aspectInFlight.insert(udid)
+        let provider = aspectProvider
         Task.detached {
-            let aspect = SessionController.fetchDeviceAspect(udid: udid)
+            let aspect = provider.aspect(forDeviceWithUDID: udid)
             await MainActor.run {
-                self.aspectInFlight = false
-                guard udid == self.selectedUDID, let aspect else { return }
-                self.deviceAspect = aspect
+                self.aspectInFlight.remove(udid)
+                guard let aspect else { return }
+                self.aspectCache[udid] = aspect
+                if udid == self.selectedUDID { self.deviceAspect = aspect }
             }
         }
-    }
-
-    nonisolated static func fetchDeviceAspect(udid: String) -> Double? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "io", udid, "screenshot", "--type=png", "-"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let rep = NSBitmapImageRep(data: data), rep.pixelsHigh > 0 else { return nil }
-        return Double(rep.pixelsWide) / Double(rep.pixelsHigh)
     }
 
     func chooseImage() {
