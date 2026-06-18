@@ -84,10 +84,10 @@ struct RootView: View {
             ActionBar(controller: controller)
         }
         .alert("Enable auto-inject?", isPresented: $confirmingAutoMode) {
-            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region) }
+            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region, deviceUDIDs: controller.devices.map(\.udid)) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("FauxCam adds a hook to ~/.lldbinit-Xcode so every simulator app loads the fake camera — no Start needed. It's removed when you turn this off or quit FauxCam. Relaunch your running simulator apps to apply.")
+            Text("FauxCam sets a launchd variable in your booted simulators so every app you launch — tapped open or run from Xcode — loads the fake camera, no Start needed. It touches no files on your Mac, is unset when you turn this off or quit FauxCam, and clears on simulator reboot. Relaunch already-running apps to apply.")
         }
         .onAppear {
             controller.refresh()
@@ -104,6 +104,7 @@ struct RootView: View {
         .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
+        .onChange(of: controller.devices) { _, devices in autoMode.syncDevices(devices.map(\.udid)) }
         .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
         .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
         .onChange(of: controlActiveState) { _, state in
@@ -130,8 +131,8 @@ struct RootView: View {
                     .labelsHidden().toggleStyle(.switch)
                 }
                 Text(autoMode.isActive
-                     ? "On — every simulator app gets the camera. Relaunch your apps to apply."
-                     : "Inject into every simulator app automatically, no Start needed. Removed when off or on quit.")
+                     ? "On — every app you open (tapped or from Xcode) gets the camera. Relaunch running apps to apply."
+                     : "Inject into every app in your booted simulators — tapped or Xcode-run, no Start. No host files; removed on quit.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let error = autoMode.lastError {

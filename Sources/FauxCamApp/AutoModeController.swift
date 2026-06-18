@@ -2,57 +2,65 @@ import SwiftUI
 import FauxDomain
 import FauxAdapters
 
-/// Drives auto-injection: installs the LLDB stop-hook so every simulator app loads the guest dylib,
-/// and runs one multi-client server feeding them all. The hook is removed when this is turned off or
-/// when the app quits (`cleanupForQuit`), so it never lingers system-wide.
+/// Drives auto-injection: sets DYLD_INSERT_LIBRARIES in each booted simulator's launchd so every app
+/// it launches (tapped open OR run from Xcode) loads the guest dylib, and runs one multi-client server
+/// feeding them all. The env touches no host file and is unset on toggle-off and on quit (and clears
+/// itself on sim reboot), so it never lingers.
 @MainActor
 final class AutoModeController: ObservableObject {
     @Published private(set) var isActive = false
     @Published var lastError: String?
 
-    private let dylibPath: String
-    private let installer: LldbInjectionInstaller
+    private let injector: SimEnvInjector
     private var server: AutoInjectionServer?
+    private var injectedUDIDs: Set<String> = []
 
     init(dylibPath: String = SessionController.defaultDylibPath()) {
-        self.dylibPath = dylibPath
-        self.installer = LldbInjectionInstaller(dylibPath: dylibPath)
-        // A hook present at launch is stale (its server died with a previous run) — remove it so the
-        // injection never outlives a running FauxCam.
-        if installer.isInstalled { installer.uninstall() }
-        self.isActive = false
+        self.injector = SimEnvInjector(dylibPath: dylibPath)
     }
 
-    func enable(descriptor: SourceDescriptor, crop: CropRegion) {
+    func enable(descriptor: SourceDescriptor, crop: CropRegion, deviceUDIDs: [String]) {
         do {
-            try installer.install()
             let server = AutoInjectionServer(descriptor: descriptor)
             server.setCrop(crop)
             try server.start()
             self.server = server
-            self.isActive = true
-            self.lastError = nil
+            injector.install(onDevices: deviceUDIDs)
+            injectedUDIDs = Set(deviceUDIDs)
+            isActive = true
+            lastError = deviceUDIDs.isEmpty ? "No booted simulators — boot one, then re-toggle." : nil
         } catch {
-            self.lastError = String(describing: error)
-            installer.uninstall()
+            lastError = String(describing: error)
             server?.stop()
             server = nil
             isActive = false
         }
     }
 
+    /// Re-applies injection to simulators booted after auto-mode was turned on (and forgets ones that
+    /// shut down — their launchd env died with them).
+    func syncDevices(_ udids: [String]) {
+        guard isActive else { return }
+        let current = Set(udids)
+        let newlyBooted = current.subtracting(injectedUDIDs)
+        if !newlyBooted.isEmpty { injector.install(onDevices: Array(newlyBooted)) }
+        injectedUDIDs = current
+    }
+
     func disable() {
         server?.stop()
         server = nil
-        installer.uninstall()
+        injector.uninstall(fromDevices: Array(injectedUDIDs))
+        injectedUDIDs = []
         isActive = false
     }
 
-    /// Synchronous teardown for app termination so the hook is gone before the process exits.
+    /// Synchronous teardown for app termination so the injected env is unset before the process exits.
     func cleanupForQuit() {
         server?.stop()
         server = nil
-        installer.uninstall()
+        injector.uninstall(fromDevices: Array(injectedUDIDs))
+        injectedUDIDs = []
     }
 
     func setSourceDescriptor(_ descriptor: SourceDescriptor) { server?.setSourceDescriptor(descriptor) }
