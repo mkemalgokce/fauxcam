@@ -24,7 +24,9 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 | 4 | Host UX | `SimWatcher` (CoreSimulator/`simctl` booted-device discovery) + SwiftUI menubar app + `faux` CLI (`run`/`list`/`doctor`): list booted sims, pick a source, auto inject+serve. | ✅ DONE (merged a95e3aa; faux run e2e + Tier-A clean, 55 tests, review fixed) |
 | 5 | QR + polish | host `QRCodeSource` (CoreImage, `--source qr:<text>`) + README + `sign-app.sh`. Guest metadata hook = documented future work. | ✅ DONE (merged cedc01b; QR e2e + signed .app verified, 58 tests, review fixed) |
 
-**All phases DONE — FauxCam is a complete, working, reviewed product.** (Phase 6 "Fig layer" was an optional low-level extension; not required for the product.)
+| 6 | Preview-layer support | guest hooks `AVCaptureVideoPreviewLayer setSession:` and drives it with an `AVSampleBufferDisplayLayer` overlay, so preview-only apps (no `AVCaptureVideoDataOutput`) show frames; configurable resolution/fps (`FAUXCAM_WIDTH/HEIGHT/FPS`) consistent across the device format and delivered frames. | ✅ DONE (merged main; proven live by screenshot on a real preview-only app, 59 tests, review fixed) |
+
+**Core phases (0–6) DONE — FauxCam is a complete, working, reviewed product.** Remaining optional extensions (not yet implemented): `AVCapturePhotoOutput`, `AVCaptureMetadataOutput` (QR/barcode scanners), `AVCaptureMovieFileOutput`, `UIImagePickerController`, and the original "Fig layer" low-level capture hooks.
 | 6 | Fig layer | `FigCaptureSession` hooks for low-level capture clients (RN/Flutter/WebRTC). | ⬜ TODO |
 
 ## Control notes
