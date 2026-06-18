@@ -37,9 +37,9 @@ public enum SimctlDeviceListDecoder {
 }
 
 public struct SimctlDeviceProvider: SimDeviceProviding {
-    private let runSimctl: ([String]) -> Data?
+    private let runSimctl: @Sendable ([String]) -> Data?
 
-    public init(runSimctl: @escaping ([String]) -> Data? = SimctlDeviceProvider.runViaXcrun) {
+    public init(runSimctl: @escaping @Sendable ([String]) -> Data? = SimctlDeviceProvider.runViaXcrun) {
         self.runSimctl = runSimctl
     }
 

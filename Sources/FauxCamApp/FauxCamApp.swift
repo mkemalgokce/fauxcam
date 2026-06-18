@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let selfView = SelfViewModel()
 
     func applicationWillTerminate(_ notification: Notification) {
-        if controller.isRunning { controller.stop() }
+        controller.stopSynchronously()
         selfView.stop()
     }
 }
@@ -65,7 +65,6 @@ struct InstrumentPanel: View {
             if selfView.authorization == .authorized { selfView.start() }
         }
         .onDisappear { selfView.stop() }
-        .onChange(of: controller.selectedUDID) { _, _ in controller.refreshInstalledApps() }
     }
 }
 
@@ -130,7 +129,10 @@ struct StatusLED: View {
     }
 
     private func updatePulse() {
-        guard state == .live, !reduceMotion else { pulse = false; return }
+        guard state == .live, !reduceMotion else {
+            withAnimation(.easeOut(duration: 0.2)) { pulse = false }
+            return
+        }
         pulse = false
         withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { pulse = true }
     }
@@ -307,7 +309,7 @@ struct SimulatorField: View {
             } else {
                 Menu {
                     ForEach(controller.devices, id: \.udid) { device in
-                        Button("\(device.name) — \(device.runtime)") { controller.selectedUDID = device.udid }
+                        Button("\(device.name) — \(device.runtime)") { controller.selectDevice(device.udid) }
                     }
                 } label: {
                     DropdownLabel(

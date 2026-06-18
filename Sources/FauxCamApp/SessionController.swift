@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AVFoundation
 import FauxDomain
 import FauxAdapters
 
@@ -28,6 +29,7 @@ final class SessionController: ObservableObject {
     private let appProvider: InstalledAppProviding
     private let session: FauxRunSession
     private let dylibPath: String
+    private var installedAppsGeneration = 0
 
     init(
         deviceProvider: SimDeviceProviding = SimctlDeviceProvider(),
@@ -45,7 +47,13 @@ final class SessionController: ObservableObject {
     var selectedDevice: SimDevice? { devices.first { $0.udid == selectedUDID } }
     var selectedApp: InstalledApp? { installedApps.first { $0.bundleIdentifier == bundleIdentifier } }
     var socketPath: String { "/private/tmp/com.fauxcam/app-\(selectedUDID).sock" }
-    var canStart: Bool { !isRunning && !isBusy && selectedDevice != nil && !bundleIdentifier.isEmpty }
+
+    var canStart: Bool {
+        guard !isRunning, !isBusy, selectedDevice != nil, !bundleIdentifier.isEmpty else { return false }
+        if sourceKind.needsDetail && sourceDetail.isEmpty { return false }
+        if sourceKind == .webcam && AVCaptureDevice.authorizationStatus(for: .video) != .authorized { return false }
+        return true
+    }
 
     var resolvedSourceSpec: String {
         switch sourceKind {
@@ -57,19 +65,35 @@ final class SessionController: ObservableObject {
     }
 
     func refresh() {
-        devices = (try? deviceProvider.bootedDevices()) ?? []
+        Task.detached { [deviceProvider] in
+            let devices = (try? deviceProvider.bootedDevices()) ?? []
+            await MainActor.run { self.applyDevices(devices) }
+        }
+    }
+
+    private func applyDevices(_ devices: [SimDevice]) {
+        self.devices = devices
         if devices.first(where: { $0.udid == selectedUDID }) == nil {
             selectedUDID = devices.first?.udid ?? ""
         }
         refreshInstalledApps()
     }
 
+    func selectDevice(_ udid: String) {
+        guard udid != selectedUDID else { return }
+        selectedUDID = udid
+        refreshInstalledApps()
+    }
+
     func refreshInstalledApps() {
         let udid = selectedUDID
         guard !udid.isEmpty else { installedApps = []; bundleIdentifier = ""; return }
+        installedAppsGeneration += 1
+        let generation = installedAppsGeneration
         Task.detached { [appProvider] in
             let apps = (try? appProvider.installedApps(on: udid)) ?? []
             await MainActor.run {
+                guard generation == self.installedAppsGeneration, udid == self.selectedUDID else { return }
                 self.installedApps = apps
                 if apps.first(where: { $0.bundleIdentifier == self.bundleIdentifier }) == nil {
                     self.bundleIdentifier = apps.first?.bundleIdentifier ?? ""
@@ -107,6 +131,7 @@ final class SessionController: ObservableObject {
     }
 
     func stop() {
+        guard isRunning, !isBusy else { return }
         isBusy = true
         status = "Stopping…"
         Task.detached { [session] in
@@ -118,6 +143,15 @@ final class SessionController: ObservableObject {
                 self.status = "Stopped"
             }
         }
+    }
+
+    /// Tears the session down inline (blocking). Used on app termination, where the process exits
+    /// before a detached Task could run, so the socket / server thread / simctl-terminate must
+    /// complete synchronously.
+    func stopSynchronously() {
+        guard isRunning else { return }
+        session.stop()
+        isRunning = false
     }
 
     nonisolated static func defaultDylibPath() -> String {

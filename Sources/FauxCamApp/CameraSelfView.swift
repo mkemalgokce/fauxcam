@@ -24,8 +24,10 @@ final class SelfViewModel: ObservableObject {
 
     func start() {
         guard authorization == .authorized else { return }
+        let needsConfigure = !configured
+        configured = true
         configureQueue.async { [session] in
-            if !self.configured {
+            if needsConfigure {
                 session.beginConfiguration()
                 if let device = AVCaptureDevice.default(for: .video),
                    let input = try? AVCaptureDeviceInput(device: device),
@@ -33,7 +35,6 @@ final class SelfViewModel: ObservableObject {
                     session.addInput(input)
                 }
                 session.commitConfiguration()
-                self.configured = true
             }
             if !session.isRunning { session.startRunning() }
         }
