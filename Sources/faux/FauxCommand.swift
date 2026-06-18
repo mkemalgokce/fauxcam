@@ -1,6 +1,7 @@
 import Foundation
 import FauxDomain
 import FauxApplication
+import FauxAdapters
 
 struct FauxCommand {
     private enum ExitCode {
@@ -37,22 +38,11 @@ struct FauxCommand {
     }
 
     private func runServe(arguments: [String]) -> Int32 {
-        var socketPath = Self.defaultSocketPath
-        var sourceSpec = Self.defaultSourceSpec
-        var positional: [String] = []
-        var index = 0
-        while index < arguments.count {
-            if arguments[index] == "--source", index + 1 < arguments.count {
-                sourceSpec = arguments[index + 1]
-                index += 2
-            } else {
-                positional.append(arguments[index])
-                index += 1
-            }
+        guard let parsed = ServeArgumentsParser.parse(arguments, defaultSocketPath: Self.defaultSocketPath, defaultSourceSpec: Self.defaultSourceSpec) else {
+            return usage()
         }
-        if let first = positional.first { socketPath = first }
         do {
-            try serverFactory(socketPath, sourceSpec).run()
+            try serverFactory(parsed.socketPath, parsed.sourceSpec).run()
             return ExitCode.passed
         } catch {
             writeError("faux serve: FAIL — \(error)\n")

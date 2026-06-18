@@ -5,24 +5,6 @@ import CoreVideo
 import FauxDomain
 @testable import FauxAdapters
 
-private func solidPixelBuffer(width: Int, height: Int, blue: UInt8, green: UInt8, red: UInt8) -> CVPixelBuffer {
-    var pixelBuffer: CVPixelBuffer?
-    CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
-                        [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &pixelBuffer)
-    let buffer = pixelBuffer!
-    CVPixelBufferLockBaseAddress(buffer, [])
-    let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
-    let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
-    for row in 0..<height {
-        for column in 0..<width {
-            let pixel = base.advanced(by: row * bytesPerRow + column * 4)
-            pixel[0] = blue; pixel[1] = green; pixel[2] = red; pixel[3] = 255
-        }
-    }
-    CVPixelBufferUnlockBaseAddress(buffer, [])
-    return buffer
-}
-
 private func makeSolidColorVideo(width: Int, height: Int, frameCount: Int, blue: UInt8, green: UInt8, red: UInt8) throws -> URL {
     let url = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("faux-video-\(ProcessInfo.processInfo.processIdentifier)-\(width)x\(height).mov")
@@ -46,7 +28,7 @@ private func makeSolidColorVideo(width: Int, height: Int, frameCount: Int, blue:
 
     for index in 0..<frameCount {
         while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.005) }
-        let pixelBuffer = solidPixelBuffer(width: width, height: height, blue: blue, green: green, red: red)
+        let pixelBuffer = TestPixelBuffers.solidBGRA(width: width, height: height, blue: blue, green: green, red: red)
         adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(index), timescale: 10))
     }
     input.markAsFinished()
