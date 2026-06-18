@@ -6,7 +6,6 @@ import ServiceManagement
 @MainActor
 final class AppSettings: ObservableObject {
     @Published var autoFps: Int { didSet { defaults.set(autoFps, forKey: Keys.fps) } }
-    @Published var autoEnableOnLaunch: Bool { didSet { defaults.set(autoEnableOnLaunch, forKey: Keys.autoEnable) } }
     @Published var hasOnboarded: Bool { didSet { defaults.set(hasOnboarded, forKey: Keys.onboarded) } }
     @Published var launchAtLogin: Bool {
         didSet {
@@ -22,13 +21,12 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
     private enum Keys {
-        static let fps = "fauxAutoFps", onboarded = "fauxOnboarded", autoEnable = "fauxAutoEnableOnLaunch"
+        static let fps = "fauxAutoFps", onboarded = "fauxOnboarded"
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         autoFps = defaults.object(forKey: Keys.fps) as? Int ?? 30
-        autoEnableOnLaunch = defaults.bool(forKey: Keys.autoEnable)
         hasOnboarded = defaults.bool(forKey: Keys.onboarded)
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
     }

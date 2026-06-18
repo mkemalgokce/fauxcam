@@ -99,7 +99,6 @@ struct RootView: View {
     @ObservedObject var settings: AppSettings
     let onOpenSettings: () -> Void
     @State private var didCleanLeftover = false
-    @State private var didAutoEnable = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     private var simulatorSelection: Binding<String?> {
@@ -125,10 +124,8 @@ struct RootView: View {
             let udids = devices.map(\.udid)
             autoMode.syncDevices(udids)
             if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
-            if settings.autoEnableOnLaunch, !didAutoEnable, !autoMode.isActive, !udids.isEmpty {
-                didAutoEnable = true
-                enableAutoInject()
-            }
+            // Auto-inject is the app's only job — turn it on as soon as a simulator is available.
+            if !autoMode.isActive, !udids.isEmpty { enableAutoInject() }
         }
     }
 
@@ -138,15 +135,16 @@ struct RootView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
-            VStack(spacing: 12) {
-                simulatorSection
-                sourceSection
-                autoInjectBar
+            VStack(spacing: 10) {
+                sourcePicker
+                previewDeviceRow
             }
             .padding(.horizontal, 16)
 
+            statusRow
             footer
         }
+        .background { pasteShortcut }
         .onAppear {
             reconfigurePreview()
             preview.start()
@@ -191,88 +189,144 @@ struct RootView: View {
         autoMode.setSourceDescriptor(controller.sourceDescriptor)
     }
 
-    // MARK: Auto-inject status (on whenever the app runs; toggle here or in Settings)
-
-    private var autoInjectBar: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: autoMode.isActive ? "bolt.fill" : "bolt.slash")
-                        .foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
-                    Text(autoMode.isActive ? "Auto-inject on" : "Auto-inject off")
-                        .font(.footnote.weight(.medium))
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { autoMode.isActive },
-                        set: { on in
-                            settings.autoEnableOnLaunch = on
-                            on ? enableAutoInject() : autoMode.disable()
-                        }
-                    ))
-                    .labelsHidden().toggleStyle(.switch)
-                    .disabled(!autoMode.isActive && controller.devices.isEmpty)
-                }
-                Text(controller.devices.isEmpty
-                     ? "Boot a simulator — every app you open then gets the camera."
-                     : "Every app you open in your simulators gets the camera. Relaunch running apps to apply.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if let error = autoMode.lastError {
-                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
-                }
-            }
-        }
-    }
-
     private func reconfigurePreview() {
         preview.setCrop(controller.region)
         preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
-    // MARK: Simulator (drives the preview + bezel aspect)
+    // MARK: Auto-inject status (always on — the app's only job)
 
-    private var simulatorSection: some View {
-        GroupBox {
-            HStack {
-                Label("Simulator", systemImage: "iphone.gen3")
+    private var statusRow: some View {
+        HStack(spacing: 7) {
+            Circle().fill(statusColor).frame(width: 7, height: 7)
+            Text(statusText).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var statusColor: Color {
+        if autoMode.lastError != nil { return .red }
+        return autoMode.isActive ? .green : .secondary
+    }
+
+    private var statusText: String {
+        if let error = autoMode.lastError { return error }
+        if controller.devices.isEmpty { return "Boot a simulator to start injecting" }
+        return autoMode.isActive ? "Active — every app you open gets the camera" : "Starting…"
+    }
+
+    // MARK: Source (icon picker + per-kind input with paste)
+
+    private var sourcePicker: some View {
+        VStack(spacing: 8) {
+            GlassEffectContainer {
+                HStack(spacing: 4) {
+                    ForEach(SessionController.SourceKind.allCases) { kind in
+                        sourceButton(kind)
+                    }
+                }
+            }
+            sourceDetail
+        }
+    }
+
+    private func sourceButton(_ kind: SessionController.SourceKind) -> some View {
+        let selected = controller.sourceKind == kind
+        return Button { controller.sourceKind = kind } label: {
+            VStack(spacing: 4) {
+                Image(systemName: kind.symbol).font(.system(size: 15, weight: .medium))
+                Text(kind.shortTitle).font(.caption2.weight(.medium))
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 8)
+            .foregroundStyle(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+            .background {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(kind.title)
+    }
+
+    @ViewBuilder private var sourceDetail: some View {
+        switch controller.sourceKind {
+        case .image:
+            HStack(spacing: 6) {
+                Button { controller.chooseImage() } label: {
+                    Label(controller.imagePath.isEmpty ? "Choose Image" : "Change", systemImage: "photo")
+                }
+                .buttonStyle(.glass).controlSize(.small)
+                Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste an image (⌘V)")
+                if !controller.imagePath.isEmpty {
+                    Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).help("Use the test image")
+                }
                 Spacer()
-                Picker("Simulator", selection: simulatorSelection) {
-                    if controller.devices.isEmpty { Text("None booted").tag(String?.none) }
+            }
+        case .video:
+            HStack(spacing: 6) {
+                Button { controller.chooseVideo() } label: {
+                    Label(controller.videoPath.isEmpty ? "Choose Video" : "Change", systemImage: "film")
+                }
+                .buttonStyle(.glass).controlSize(.small)
+                Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste a video file (⌘V)")
+                Text(videoFileName).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Spacer()
+            }
+        case .qr:
+            HStack(spacing: 6) {
+                TextField("Text or URL to encode", text: $controller.qrText).textFieldStyle(.roundedBorder)
+                Button { controller.pasteFromClipboard() } label: { Image(systemName: "clipboard") }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste")
+            }
+        case .webcam:
+            HStack {
+                Text(controller.sourceKind.footerHint).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+        }
+    }
+
+    private var videoFileName: String {
+        controller.videoPath.isEmpty ? "No file chosen" : (controller.videoPath as NSString).lastPathComponent
+    }
+
+    // MARK: Preview device (only sets the preview + bezel aspect — every sim is injected)
+
+    private var previewDeviceRow: some View {
+        GroupBox {
+            HStack(spacing: 8) {
+                Image(systemName: "iphone.gen3").foregroundStyle(.secondary)
+                Text("Preview on").font(.callout)
+                Spacer()
+                Picker("Preview device", selection: simulatorSelection) {
+                    if controller.devices.isEmpty { Text("No simulators").tag(String?.none) }
                     ForEach(controller.devices, id: \.udid) { device in
                         Text(device.name).tag(String?.some(device.udid))
                     }
                 }
-                .labelsHidden().frame(width: 184)
+                .labelsHidden().fixedSize()
                 .disabled(controller.devices.isEmpty)
                 Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.borderless)
-                    .help("Refresh booted simulators")
+                    .buttonStyle(.borderless).help("Refresh booted simulators")
             }
         }
+        .help("Sets which device's screen shape the preview shows. All booted simulators are injected automatically.")
     }
 
-    // MARK: Source
-
-    private var sourceSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("Source", selection: $controller.sourceKind) {
-                    ForEach(SessionController.SourceKind.allCases) { kind in
-                        Text(kind.shortTitle).tag(kind)
-                    }
-                }
-                .pickerStyle(.segmented).labelsHidden()
-
-                if controller.sourceKind.needsDetail {
-                    SourceDetailRow(controller: controller)
-                }
-                Text(controller.sourceKind.footerHint)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+    /// Invisible ⌘V handler that pastes into the active source (image/video). QR's field handles paste itself.
+    private var pasteShortcut: some View {
+        Button("") { controller.pasteFromClipboard() }
+            .keyboardShortcut("v", modifiers: .command)
+            .opacity(0).frame(width: 0, height: 0)
+            .disabled(controller.sourceKind == .webcam || controller.sourceKind == .qr)
     }
-
-    // MARK: Zoom
 }
 
 // MARK: - Viewfinder (renders frames only — source-agnostic)
@@ -312,7 +366,6 @@ struct ViewfinderCard: View {
                 zoomBadge.padding(10)
             }
         }
-        .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
                 if let image = preview.deviceImage {
@@ -381,29 +434,6 @@ struct ViewfinderCard: View {
             .onEnded { _ in dragStart = nil }
     }
 
-    @ViewBuilder private var sourceActions: some View {
-        switch controller.sourceKind {
-        case .image:
-            if controller.imagePath.isEmpty {
-                Button { controller.chooseImage() } label: { Label("Choose Image", systemImage: "photo.badge.plus") }
-                    .buttonStyle(.glass).controlSize(.small)
-            } else {
-                HStack(spacing: 6) {
-                    Button { controller.chooseImage() } label: { Label("Change", systemImage: "photo") }
-                        .buttonStyle(.glass).controlSize(.small)
-                    Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless).help("Use the test image")
-                }
-            }
-        case .video:
-            Button { controller.chooseVideo() } label: {
-                Label(controller.videoPath.isEmpty ? "Choose Video" : "Change", systemImage: controller.videoPath.isEmpty ? "plus" : "film")
-            }
-            .buttonStyle(.glass).controlSize(.small)
-        case .webcam, .qr:
-            EmptyView()
-        }
-    }
 }
 
 /// A small phone bezel showing how the frame maps onto the selected device.
@@ -428,34 +458,6 @@ struct DeviceFramePiP<Content: View>: View {
             }
             .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
             .accessibilityLabel("Device preview")
-    }
-}
-
-// MARK: - Source detail
-
-struct SourceDetailRow: View {
-    @ObservedObject var controller: SessionController
-
-    var body: some View {
-        if controller.sourceKind == .video {
-            LabeledContent("File") {
-                HStack(spacing: 8) {
-                    Text(videoFileName)
-                        .foregroundStyle(controller.videoPath.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                        .lineLimit(1).truncationMode(.middle)
-                    Button("Choose…") { controller.chooseVideo() }
-                }
-            }
-        } else if controller.sourceKind == .qr {
-            LabeledContent("Text") {
-                TextField("Text to encode", text: $controller.qrText)
-                    .textFieldStyle(.roundedBorder).frame(width: 190)
-            }
-        }
-    }
-
-    private var videoFileName: String {
-        controller.videoPath.isEmpty ? "No file chosen" : (controller.videoPath as NSString).lastPathComponent
     }
 }
 

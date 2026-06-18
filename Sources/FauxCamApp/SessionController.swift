@@ -165,6 +165,48 @@ final class SessionController: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { videoPath = url.path }
     }
 
+    /// True when the clipboard holds something usable for the current source (so Paste can be shown).
+    var clipboardHasUsableContent: Bool {
+        let board = NSPasteboard.general
+        switch sourceKind {
+        case .image: return board.canReadObject(forClasses: [NSImage.self]) || pasteboardFileURL(extensions: Self.imageExtensions) != nil
+        case .video: return pasteboardFileURL(extensions: Self.videoExtensions) != nil
+        case .qr: return board.string(forType: .string)?.isEmpty == false
+        case .webcam: return false
+        }
+    }
+
+    /// Paste for the active source: an image/video file URL, a copied image, or QR text.
+    func pasteFromClipboard() {
+        switch sourceKind {
+        case .image:
+            if let url = pasteboardFileURL(extensions: Self.imageExtensions) { imagePath = url.path; return }
+            if let image = NSImage(pasteboard: .general), let path = saveTemporaryImage(image) { imagePath = path }
+        case .video:
+            if let url = pasteboardFileURL(extensions: Self.videoExtensions) { videoPath = url.path }
+        case .qr:
+            if let text = NSPasteboard.general.string(forType: .string) { qrText = text }
+        case .webcam:
+            break
+        }
+    }
+
+    private static let imageExtensions = ["png", "jpg", "jpeg", "heic", "heif", "gif", "bmp", "tiff", "webp"]
+    private static let videoExtensions = ["mov", "mp4", "m4v", "qt"]
+
+    private func pasteboardFileURL(extensions: [String]) -> URL? {
+        let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
+        return urls.first { extensions.contains($0.pathExtension.lowercased()) && FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func saveTemporaryImage(_ image: NSImage) -> String? {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("fauxcam-paste-\(UUID().uuidString).png")
+        do { try png.write(to: url); return url.path } catch { return nil }
+    }
+
     private func loadPreviewImage() {
         let path = imagePath
         guard !path.isEmpty else { previewImage = nil; return }

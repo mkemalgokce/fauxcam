@@ -19,9 +19,16 @@ struct SettingsView: View {
 
     private var general: some View {
         Form {
-            Section("Auto-inject") {
-                Toggle("Inject into simulators", isOn: autoInjectBinding)
-                Toggle("Turn on automatically at launch", isOn: $settings.autoEnableOnLaunch)
+            Section {
+                LabeledContent("Auto-inject") {
+                    Label(autoMode.isActive ? "Active" : (autoMode.lastError == nil ? "Waiting for a simulator" : "Off"),
+                          systemImage: autoMode.isActive ? "bolt.fill" : "bolt.slash")
+                        .foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                        .font(.callout.weight(.medium))
+                }
+            } footer: {
+                Text("FauxCam injects the fake camera into every app in your booted simulators. It's the app's only job — to stop, uninstall below.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Startup") {
                 Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
@@ -42,21 +49,6 @@ struct SettingsView: View {
         } message: {
             Text("This cleans up all injection and moves the app to the Trash. Relaunch your simulator apps afterwards for a clean state.")
         }
-    }
-
-    private var autoInjectBinding: Binding<Bool> {
-        Binding(
-            get: { autoMode.isActive },
-            set: { on in
-                settings.autoEnableOnLaunch = on
-                if on {
-                    autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
-                                    deviceUDIDs: controller.devices.map(\.udid), fps: settings.autoFps)
-                } else {
-                    autoMode.disable()
-                }
-            }
-        )
     }
 
     // MARK: About
@@ -123,19 +115,9 @@ struct OnboardingView: View {
                 bullet("slider.horizontal.3", "Pick the simulator to preview, choose your source, and frame it with zoom + drag.")
                 bullet("checkmark.shield", "Nothing lingers: all injection is removed when you turn it off or quit FauxCam.")
             }
-            VStack(spacing: 6) {
-                Button("Enable Auto-inject & Continue") {
-                    settings.autoEnableOnLaunch = true
-                    settings.hasOnboarded = true
-                }
+            Button("Get Started") { settings.hasOnboarded = true }
                 .buttonStyle(.borderedProminent).controlSize(.large)
-                Button("Not now") {
-                    settings.autoEnableOnLaunch = false
-                    settings.hasOnboarded = true
-                }
-                .buttonStyle(.borderless).controlSize(.small)
-            }
-            Text("Sets a launchd variable in your booted simulators — no files on your Mac, removed when you quit or turn it off. Change this any time in Settings.")
+            Text("FauxCam sets a launchd variable in your booted simulators to inject the camera — no files on your Mac, removed when you quit or uninstall.")
                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
