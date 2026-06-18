@@ -180,9 +180,13 @@ private final class CameraPhotoProbe: NSObject, AVCapturePhotoCaptureDelegate {
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        // Read the getters that previously crashed (metadata/timestamp + resolvedSettings extras).
         let bytes = photo.fileDataRepresentation()?.count ?? -1
+        let metadataKeys = photo.metadata.count
+        let isRaw = photo.isRawPhoto
         let dimensions = photo.resolvedSettings.photoDimensions
-        os_log("photo received bytes=%{public}d dims=%{public}dx%{public}d", log: Self.log,
-               bytes, dimensions.width, dimensions.height)
+        let expected = photo.resolvedSettings.expectedPhotoCount
+        os_log("photo received bytes=%{public}d dims=%{public}dx%{public}d meta=%{public}d raw=%{public}d expected=%{public}d", log: Self.log,
+               bytes, dimensions.width, dimensions.height, metadataKeys, isRaw ? 1 : 0, expected)
     }
 }

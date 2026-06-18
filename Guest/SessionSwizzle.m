@@ -97,6 +97,9 @@ static NSArray *fauxMetadataCorners(id self, SEL _cmd) {
 }
 static CMTime fauxMetadataTime(id self, SEL _cmd) { return CMClockGetTime(CMClockGetHostTimeClock()); }
 static CMTime fauxMetadataDuration(id self, SEL _cmd) { return kCMTimeZero; }
+static NSString *fauxMetadataDescription(id self, SEL _cmd) {
+    return [NSString stringWithFormat:@"<FauxMetadataObject %@>", objc_getAssociatedObject(self, kMetadataStringKey)];
+}
 
 static Class fauxMetadataObjectClass(void) {
     static Class metadataClass;
@@ -114,6 +117,7 @@ static Class fauxMetadataObjectClass(void) {
         class_addMethod(metadataClass, @selector(corners), (IMP)fauxMetadataCorners, "@@:");
         class_addMethod(metadataClass, @selector(time), (IMP)fauxMetadataTime, timeTypes.UTF8String);
         class_addMethod(metadataClass, @selector(duration), (IMP)fauxMetadataDuration, timeTypes.UTF8String);
+        class_addMethod(metadataClass, @selector(description), (IMP)fauxMetadataDescription, "@@:");
         objc_registerClassPair(metadataClass);
     });
     return metadataClass;
@@ -169,6 +173,20 @@ static CMVideoDimensions fauxResolvedZeroDimensions(id self, SEL _cmd) {
     return dimensions;
 }
 
+// Benign answers for the getters real apps read on the fake result objects, so an
+// unhandled selector never reaches the real superclass IMP over the zeroed `_internal` ivar.
+static id fauxFakeNilObject(id self, SEL _cmd) { return nil; }
+static id fauxFakeEmptyDictionary(id self, SEL _cmd) { return @{}; }
+static NSInteger fauxFakeIntegerOne(id self, SEL _cmd) { return 1; }
+static NSInteger fauxFakeIntegerZero(id self, SEL _cmd) { return 0; }
+static BOOL fauxFakeBoolNo(id self, SEL _cmd) { return NO; }
+static void *fauxFakeNullPointer(id self, SEL _cmd) { return NULL; }
+static CMTime fauxFakeHostTime(id self, SEL _cmd) { return CMClockGetTime(CMClockGetHostTimeClock()); }
+static CMTimeRange fauxFakeZeroTimeRange(id self, SEL _cmd) { return kCMTimeRangeZero; }
+static NSString *fauxFakePhotoCodec(id self, SEL _cmd) { return AVVideoCodecTypeJPEG; }
+static NSString *fauxResolvedDescriptionText(id self, SEL _cmd) { return @"<FauxResolvedPhotoSettings>"; }
+static NSString *fauxPhotoDescriptionText(id self, SEL _cmd) { return @"<FauxCapturePhoto>"; }
+
 static id fauxMakeResolvedSettings(int64_t uniqueID, int32_t width, int32_t height) {
     static Class settingsClass;
     static dispatch_once_t once;
@@ -178,10 +196,20 @@ static id fauxMakeResolvedSettings(int64_t uniqueID, int32_t width, int32_t heig
         settingsClass = objc_allocateClassPair(superClass, "FauxResolvedPhotoSettings", 0);
         if (!settingsClass) return;
         NSString *dimsTypes = [NSString stringWithFormat:@"%s@:", @encode(CMVideoDimensions)];
+        NSString *timeRangeTypes = [NSString stringWithFormat:@"%s@:", @encode(CMTimeRange)];
         class_addMethod(settingsClass, @selector(uniqueID), (IMP)fauxResolvedUniqueID, "q@:");
         class_addMethod(settingsClass, @selector(photoDimensions), (IMP)fauxResolvedPhotoDimensions, dimsTypes.UTF8String);
         class_addMethod(settingsClass, @selector(previewDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
         class_addMethod(settingsClass, @selector(livePhotoMovieDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(embeddedThumbnailDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(rawPhotoDimensions), (IMP)fauxResolvedZeroDimensions, dimsTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(photoProcessingTimeRange), (IMP)fauxFakeZeroTimeRange, timeRangeTypes.UTF8String);
+        class_addMethod(settingsClass, @selector(expectedPhotoCount), (IMP)fauxFakeIntegerOne, "q@:");
+        class_addMethod(settingsClass, @selector(photoCodecType), (IMP)fauxFakePhotoCodec, "@@:");
+        class_addMethod(settingsClass, @selector(isFlashEnabled), (IMP)fauxFakeBoolNo, "B@:");
+        class_addMethod(settingsClass, @selector(isStillImageStabilizationEnabled), (IMP)fauxFakeBoolNo, "B@:");
+        class_addMethod(settingsClass, @selector(isRedEyeReductionEnabled), (IMP)fauxFakeBoolNo, "B@:");
+        class_addMethod(settingsClass, @selector(description), (IMP)fauxResolvedDescriptionText, "@@:");
         objc_registerClassPair(settingsClass);
     });
     if (!settingsClass) return nil;
@@ -231,10 +259,22 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         if (!superClass) return;
         photoClass = objc_allocateClassPair(superClass, "FauxCapturePhoto", 0);
         if (!photoClass) return;
+        NSString *timeTypes = [NSString stringWithFormat:@"%s@:", @encode(CMTime)];
         class_addMethod(photoClass, @selector(fileDataRepresentation), (IMP)fauxPhotoFileDataRepresentation, "@@:");
         class_addMethod(photoClass, @selector(pixelBuffer), (IMP)fauxPhotoPixelBuffer, "^{__CVBuffer=}@:");
         class_addMethod(photoClass, @selector(CGImageRepresentation), (IMP)fauxPhotoCGImageRepresentation, "^{CGImage=}@:");
         class_addMethod(photoClass, @selector(resolvedSettings), (IMP)fauxPhotoResolvedSettings, "@@:");
+        class_addMethod(photoClass, @selector(metadata), (IMP)fauxFakeEmptyDictionary, "@@:");
+        class_addMethod(photoClass, @selector(timestamp), (IMP)fauxFakeHostTime, timeTypes.UTF8String);
+        class_addMethod(photoClass, @selector(depthData), (IMP)fauxFakeNilObject, "@@:");
+        class_addMethod(photoClass, @selector(previewPixelBuffer), (IMP)fauxFakeNullPointer, "^{__CVBuffer=}@:");
+        class_addMethod(photoClass, @selector(portraitEffectsMatte), (IMP)fauxFakeNilObject, "@@:");
+        class_addMethod(photoClass, @selector(cameraCalibrationData), (IMP)fauxFakeNilObject, "@@:");
+        class_addMethod(photoClass, @selector(embeddedThumbnailPhotoFormat), (IMP)fauxFakeNilObject, "@@:");
+        class_addMethod(photoClass, @selector(photoCount), (IMP)fauxFakeIntegerOne, "q@:");
+        class_addMethod(photoClass, @selector(sequenceCount), (IMP)fauxFakeIntegerOne, "q@:");
+        class_addMethod(photoClass, @selector(isRawPhoto), (IMP)fauxFakeBoolNo, "B@:");
+        class_addMethod(photoClass, @selector(description), (IMP)fauxPhotoDescriptionText, "@@:");
         objc_registerClassPair(photoClass);
     });
     if (!photoClass) return nil;
@@ -329,7 +369,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         targets = [_metadataTargets copy];
     }
     CVPixelBufferRef buffer = [self copyLatestImageBuffer];
-    if (!buffer) { os_log(fauxSessionLog(), "metadata scan: no latest buffer"); return; }
+    if (!buffer) return;
     NSArray *features = [fauxQRDetector() featuresInImage:[CIImage imageWithCVPixelBuffer:buffer]];
     CVPixelBufferRelease(buffer);
 
@@ -395,6 +435,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 
 - (void)stop {
     _startRequested = NO;
+    _hasPhotoConsumer = NO;
     if (_timer) {
         dispatch_source_cancel(_timer);
         _timer = nil;
@@ -403,6 +444,11 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     @synchronized(self) {
         targets = [_previewTargets copy];
         [_previewTargets removeAllObjects];
+        [_metadataTargets removeAllObjects];
+        if (_latestImageBuffer) {
+            CVPixelBufferRelease(_latestImageBuffer);
+            _latestImageBuffer = NULL;
+        }
     }
     if (targets.count > 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -557,8 +603,6 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     }
 }
 
-- (dispatch_queue_t)pumpQueue { return _pumpQueue; }
-
 - (void)dealloc {
     [self stop];
     if (_sourcePixels) free(_sourcePixels);
@@ -570,9 +614,43 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 
 // MARK: - Pump lookup
 
+static long fauxConnectionVideoOrientation(id self, SEL _cmd) { return 1; }
+static BOOL fauxConnectionNo(id self, SEL _cmd) { return NO; }
+static BOOL fauxConnectionYes(id self, SEL _cmd) { return YES; }
+static id fauxConnectionEmptyArray(id self, SEL _cmd) { return @[]; }
+static id fauxConnectionNilObject(id self, SEL _cmd) { return nil; }
+static double fauxConnectionZeroDouble(id self, SEL _cmd) { return 0; }
+static NSString *fauxConnectionDescription(id self, SEL _cmd) { return @"<FauxCaptureConnection>"; }
+
+/// A single shared fake AVCaptureConnection handed to app delegates as the `fromConnection:`
+/// argument. It is a never-freed singleton (like the fake format) so the real superclass dealloc,
+/// which dereferences a zeroed internal ivar, never runs; the commonly-read accessors are answered
+/// safely so a delegate reading connection.videoOrientation / isVideoMirrored / inputPorts cannot
+/// reach the zeroed-internal superclass IMP and crash the host.
 static id fauxMakeConnection(void) {
-    Class connectionClass = objc_getClass("AVCaptureConnection");
-    return connectionClass ? class_createInstance(connectionClass, 0) : nil;
+    static id connection;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class superClass = objc_getClass("AVCaptureConnection");
+        if (!superClass) return;
+        Class connectionClass = objc_getClass("FauxCaptureConnection");
+        if (!connectionClass) {
+            connectionClass = objc_allocateClassPair(superClass, "FauxCaptureConnection", 0);
+            if (!connectionClass) return;
+            class_addMethod(connectionClass, @selector(videoOrientation), (IMP)fauxConnectionVideoOrientation, "q@:");
+            class_addMethod(connectionClass, @selector(isVideoMirrored), (IMP)fauxConnectionNo, "B@:");
+            class_addMethod(connectionClass, @selector(isVideoMirroringSupported), (IMP)fauxConnectionYes, "B@:");
+            class_addMethod(connectionClass, @selector(isEnabled), (IMP)fauxConnectionYes, "B@:");
+            class_addMethod(connectionClass, @selector(isActive), (IMP)fauxConnectionYes, "B@:");
+            class_addMethod(connectionClass, @selector(inputPorts), (IMP)fauxConnectionEmptyArray, "@@:");
+            class_addMethod(connectionClass, @selector(output), (IMP)fauxConnectionNilObject, "@@:");
+            class_addMethod(connectionClass, @selector(videoRotationAngle), (IMP)fauxConnectionZeroDouble, "d@:");
+            class_addMethod(connectionClass, @selector(description), (IMP)fauxConnectionDescription, "@@:");
+            objc_registerClassPair(connectionClass);
+        }
+        connection = class_createInstance(connectionClass, 0);
+    });
+    return connection;
 }
 
 static FauxFramePump *fauxPumpForSession(id session) {
@@ -628,29 +706,40 @@ static void fauxInvokePhotoDelegate(id delegate, SEL selector, id output, id arg
 
 static void fauxCapturePhotoWithSettings(id self, SEL _cmd, id settings, id delegate) {
     FauxFramePump *pump = objc_getAssociatedObject(self, kPhotoPumpKey);
-    CVPixelBufferRef buffer = pump ? [pump copyLatestImageBuffer] : NULL;
     int64_t uniqueID = 0;
     if ([settings respondsToSelector:@selector(uniqueID)]) {
         uniqueID = ((int64_t (*)(id, SEL))objc_msgSend)(settings, @selector(uniqueID));
     }
-    int32_t width = buffer ? (int32_t)CVPixelBufferGetWidth(buffer) : 0;
-    int32_t height = buffer ? (int32_t)CVPixelBufferGetHeight(buffer) : 0;
-    id resolvedSettings = fauxMakeResolvedSettings(uniqueID, width, height);
-    id photo = buffer ? fauxMakePhoto(buffer, resolvedSettings) : nil;
-    if (buffer) CVPixelBufferRelease(buffer);
     id output = self;
 
+    // Return immediately (matching native async semantics) and do the JPEG encode + fake-object
+    // construction off the caller's (typically main) thread.
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        CVPixelBufferRef buffer = pump ? [pump copyLatestImageBuffer] : NULL;
+        int32_t width = buffer ? (int32_t)CVPixelBufferGetWidth(buffer) : 0;
+        int32_t height = buffer ? (int32_t)CVPixelBufferGetHeight(buffer) : 0;
+        id resolvedSettings = fauxMakeResolvedSettings(uniqueID, width, height);
+        id photo = buffer ? fauxMakePhoto(buffer, resolvedSettings) : nil;
+        if (buffer) CVPixelBufferRelease(buffer);
+
         fauxInvokePhotoDelegate(delegate, @selector(captureOutput:willBeginCaptureForResolvedSettings:), output, resolvedSettings);
         fauxInvokePhotoDelegate(delegate, @selector(captureOutput:willCapturePhotoForResolvedSettings:), output, resolvedSettings);
         fauxInvokePhotoDelegate(delegate, @selector(captureOutput:didCapturePhotoForResolvedSettings:), output, resolvedSettings);
-        if (photo && [delegate respondsToSelector:@selector(captureOutput:didFinishProcessingPhoto:error:)]) {
-            ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishProcessingPhoto:error:), output, photo, nil);
+
+        NSError *captureError = nil;
+        if (photo) {
+            if ([delegate respondsToSelector:@selector(captureOutput:didFinishProcessingPhoto:error:)]) {
+                ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishProcessingPhoto:error:), output, photo, nil);
+            }
+        } else {
+            // No frame yet: report a real error instead of silently signalling success.
+            captureError = [NSError errorWithDomain:@"com.fauxcam" code:-1
+                                           userInfo:@{ NSLocalizedDescriptionKey: @"FauxCam: no frame available yet" }];
         }
         if ([delegate respondsToSelector:@selector(captureOutput:didFinishCaptureForResolvedSettings:error:)]) {
-            ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishCaptureForResolvedSettings:error:), output, resolvedSettings, nil);
+            ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, @selector(captureOutput:didFinishCaptureForResolvedSettings:error:), output, resolvedSettings, captureError);
         }
-        os_log(fauxSessionLog(), "photo captured (%dx%d)", width, height);
+        os_log(fauxSessionLog(), "photo captured (%dx%d) ok=%d", width, height, photo != nil);
     });
 }
 
