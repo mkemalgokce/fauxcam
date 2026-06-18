@@ -70,19 +70,26 @@ public struct LldbInjectionInstaller {
         try body.write(to: fauxLldbinitURL, atomically: true, encoding: .utf8)
     }
 
-    /// Removes the marked block (inclusive) and nothing else.
+    /// Removes the marked block (inclusive) and NOTHING else. Refuses to touch the file unless both
+    /// markers are present and balanced, so a corrupted/hand-edited init file (orphaned marker) is
+    /// never truncated. Preserves the file's CRLF/LF line endings.
     static func removingBlock(from content: String) -> String {
-        guard content.contains(beginMarker) else { return content }
+        guard content.contains(beginMarker), content.contains(endMarker) else { return content }
+        let usesCRLF = content.contains("\r\n")
+        let normalized = usesCRLF ? content.replacingOccurrences(of: "\r\n", with: "\n") : content
         var kept: [Substring] = []
         var insideBlock = false
-        for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.contains(beginMarker) { insideBlock = true; continue }
+        var closedBlock = false
+        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
+            if !insideBlock, line.contains(beginMarker) { insideBlock = true; continue }
             if insideBlock {
-                if line.contains(endMarker) { insideBlock = false }
+                if line.contains(endMarker) { insideBlock = false; closedBlock = true }
                 continue
             }
             kept.append(line)
         }
-        return kept.joined(separator: "\n")
+        guard closedBlock, !insideBlock else { return content }   // unbalanced → leave the file untouched
+        let result = kept.joined(separator: "\n")
+        return usesCRLF ? result.replacingOccurrences(of: "\n", with: "\r\n") : result
     }
 }

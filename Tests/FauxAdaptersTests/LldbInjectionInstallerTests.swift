@@ -56,3 +56,19 @@ private func makeInstaller(_ dir: URL, dylib: String) throws -> LldbInjectionIns
     let input = "a\n\(LldbInjectionInstaller.beginMarker)\ncommand source \"x\"\n\(LldbInjectionInstaller.endMarker)\nb"
     #expect(LldbInjectionInstaller.removingBlock(from: input) == "a\nb")
 }
+
+@Test func removingBlockNoOpsOnMissingEndMarker() {
+    // Orphaned begin marker (corrupted/hand-edited): must NOT drop the rest of the file.
+    let input = "keep1\n\(LldbInjectionInstaller.beginMarker)\ncommand source \"x\"\nkeep2\nkeep3"
+    #expect(LldbInjectionInstaller.removingBlock(from: input) == input)  // unchanged
+}
+
+@Test func removingBlockHandlesCRLFWithoutDeletingFile() {
+    let input = "settings set a b\r\n\(LldbInjectionInstaller.beginMarker)\r\ncommand source \"x\"\r\n\(LldbInjectionInstaller.endMarker)\r\nkeep tail\r\n"
+    let out = LldbInjectionInstaller.removingBlock(from: input)
+    #expect(out.contains("settings set a b"))
+    #expect(out.contains("keep tail"))
+    #expect(!out.contains(LldbInjectionInstaller.beginMarker))
+    #expect(out.contains("\r\n"))  // CRLF preserved
+    #expect(!out.isEmpty)
+}

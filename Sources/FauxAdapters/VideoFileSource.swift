@@ -30,6 +30,9 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     private var lastDecodeRealtimeNanoseconds: UInt64 = 0
     private var cachedNaturalAspect: Double = 16.0 / 9.0
     private static let reuseWindowNanoseconds: UInt64 = 25_000_000
+    // The auto-mode server pulls one shared source from many client threads; the AVAssetReader and
+    // sample cache are not reentrant, so serialize frame production.
+    private let frameLock = NSLock()
 
     private let crop: @Sendable () -> CropRegion
 
@@ -42,6 +45,8 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     public var naturalAspect: Double { cachedNaturalAspect }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
+        frameLock.lock()
+        defer { frameLock.unlock() }
         if permanentlyFailed { return blackFrame(for: demand, clock: clock) }
         do {
             guard let imageBuffer = try currentImageBuffer(),
