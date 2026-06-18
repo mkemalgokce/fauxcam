@@ -15,6 +15,6 @@ let package = Package(
         .testTarget(name: "FauxDomainTests", dependencies: ["FauxDomain"]),
         .testTarget(name: "FauxApplicationTests", dependencies: ["FauxApplication", "FauxDomain"]),
         .testTarget(name: "FauxAdaptersTests", dependencies: ["FauxAdapters", "FauxApplication", "FauxDomain"]),
-        .testTarget(name: "FauxLoaderIntegrationTests")
+        .testTarget(name: "FauxLoaderIntegrationTests", dependencies: ["FauxDomain", "FauxApplication", "FauxAdapters"])
     ]
 )

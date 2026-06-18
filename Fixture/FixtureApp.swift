@@ -70,11 +70,25 @@ private final class CameraFrameProbe: NSObject, AVCaptureVideoDataOutputSampleBu
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         receivedFrameCount += 1
         let isValid = CMSampleBufferIsValid(sampleBuffer)
-        let hasImageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) != nil
+        let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         let dimensions = sampleBuffer.formatDescription.map { CMVideoFormatDescriptionGetDimensions($0) }
-        os_log("frame received w=%{public}d h=%{public}d valid=%{public}d image=%{public}d count=%{public}d",
+        let centerPixel = imageBuffer.flatMap(Self.centerPixel) ?? (blue: -1, green: -1, red: -1)
+        os_log("frame received w=%{public}d h=%{public}d valid=%{public}d image=%{public}d b=%{public}d g=%{public}d r=%{public}d count=%{public}d",
                log: Self.log, type: .default,
                Int(dimensions?.width ?? 0), Int(dimensions?.height ?? 0),
-               isValid ? 1 : 0, hasImageBuffer ? 1 : 0, receivedFrameCount)
+               isValid ? 1 : 0, imageBuffer != nil ? 1 : 0,
+               centerPixel.blue, centerPixel.green, centerPixel.red, receivedFrameCount)
+    }
+
+    private static func centerPixel(_ imageBuffer: CVImageBuffer) -> (blue: Int, green: Int, red: Int)? {
+        CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(imageBuffer) else { return nil }
+        let width = CVPixelBufferGetWidth(imageBuffer)
+        let height = CVPixelBufferGetHeight(imageBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
+        let offset = (height / 2) * bytesPerRow + (width / 2) * 4
+        let pointer = base.advanced(by: offset).assumingMemoryBound(to: UInt8.self)
+        return (blue: Int(pointer[0]), green: Int(pointer[1]), red: Int(pointer[2]))
     }
 }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCES=("$ROOT"/Guest/*.m)
+SOURCES=("$ROOT"/Guest/*.m "$ROOT"/Guest/*.c)
 OUTPUT_DIR="$ROOT/dist"
 OUTPUT="$OUTPUT_DIR/libFaux.dylib"
 DEPLOYMENT_TARGET="15.0"

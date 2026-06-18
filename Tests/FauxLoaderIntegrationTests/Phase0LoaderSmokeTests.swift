@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+import FauxDomain
+import FauxApplication
+import FauxAdapters
 
 struct CommandResult {
     let exitStatus: Int32
@@ -406,6 +409,84 @@ struct FrameDeliverySmoke {
 
         var environment = ProcessInfo.processInfo.environment
         if let dylibPath { environment["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = dylibPath }
+        let launch = Shell.runCapturing(
+            executablePath: "/usr/bin/xcrun",
+            arguments: ["simctl", "launch", "--terminate-running-process", deviceIdentifier, Self.fixtureBundleIdentifier],
+            environment: environment
+        )
+        #expect(launch.succeeded, Comment(rawValue: launch.combinedOutput))
+
+        let deadline = Date().addingTimeInterval(Self.deadlineSeconds)
+        while Date() < deadline {
+            if String(decoding: capturedLog.contents, as: UTF8.self).contains(needle) { break }
+            Thread.sleep(forTimeInterval: Self.pollIntervalSeconds)
+        }
+        return String(decoding: capturedLog.contents, as: UTF8.self)
+    }
+}
+
+// MARK: - Phase 2: host-fed frame delivery over the socket
+
+@Suite("Phase 2: host-fed frame delivery", .enabled(if: BootedSimulatorGate.isSatisfied, Comment(rawValue: BootedSimulatorGate.skipReason)))
+struct HostFedFrameDeliverySmoke {
+    private static let fixtureBundleIdentifier =
+        ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
+    private static let guestLogSubsystem = "com.fauxcam"
+    private static let serverColor = (blue: UInt8(12), green: UInt8(34), red: UInt8(56), alpha: UInt8(255))
+    private static let hostColorNeedle = "b=12 g=34 r=56"
+    private static let deadlineSeconds: TimeInterval = 25
+    private static let logStreamWarmupSeconds: TimeInterval = 2
+    private static let pollIntervalSeconds: TimeInterval = 0.25
+
+    @Test("host-served image color reaches the capture delegate over the unix socket")
+    func hostServedColorReachesDelegate() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        buildAndInstall(onto: deviceIdentifier)
+
+        let socketPath = "/private/tmp/com.fauxcam/hostfed-\(ProcessInfo.processInfo.processIdentifier).sock"
+        let transport = try UnixSocketTransport(listeningAt: socketPath)
+        let coordinator = StreamCoordinator(source: ImageSource(solidColor: Self.serverColor), transport: transport)
+        let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
+        serverThread.start()
+        defer { transport.close() }
+
+        let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, socketPath: socketPath, untilContains: Self.hostColorNeedle)
+        #expect(captured.contains(Self.hostColorNeedle), Comment(rawValue: "expected host color \(Self.hostColorNeedle); captured:\n\(captured)"))
+    }
+
+    private func buildAndInstall(onto deviceIdentifier: String) {
+        let dylibBuild = Shell.runCapturing(executablePath: "/bin/bash", arguments: [RepositoryLayout.buildDylibScript.path], currentDirectory: RepositoryLayout.root)
+        #expect(dylibBuild.succeeded, Comment(rawValue: dylibBuild.combinedOutput))
+        let fixtureBuild = Shell.runCapturing(executablePath: "/bin/bash", arguments: [RepositoryLayout.buildFixtureScript.path], currentDirectory: RepositoryLayout.root)
+        #expect(fixtureBuild.succeeded, Comment(rawValue: fixtureBuild.combinedOutput))
+        let install = Shell.xcrun(["simctl", "install", deviceIdentifier, RepositoryLayout.fixtureBundle.path])
+        #expect(install.succeeded, Comment(rawValue: install.combinedOutput))
+    }
+
+    private func launchAndCapture(deviceIdentifier: String, socketPath: String, untilContains needle: String) -> String {
+        let logStreamProcess = Process()
+        let logStreamOutput = Pipe()
+        let capturedLog = ConcurrentDataBuffer()
+        logStreamProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        logStreamProcess.arguments = [
+            "simctl", "spawn", deviceIdentifier, "log", "stream",
+            "--style", "compact",
+            "--predicate", "subsystem == \"\(Self.guestLogSubsystem)\" AND category == \"frames\""
+        ]
+        logStreamProcess.standardOutput = logStreamOutput
+        logStreamProcess.standardError = Pipe()
+        logStreamOutput.fileHandleForReading.readabilityHandler = { capturedLog.append($0.availableData) }
+        do { try logStreamProcess.run() } catch { return "failed to start log stream: \(error)" }
+        defer {
+            logStreamOutput.fileHandleForReading.readabilityHandler = nil
+            if logStreamProcess.isRunning { logStreamProcess.terminate() }
+            _ = Shell.xcrun(["simctl", "terminate", deviceIdentifier, Self.fixtureBundleIdentifier])
+        }
+        Thread.sleep(forTimeInterval: Self.logStreamWarmupSeconds)
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = RepositoryLayout.distributedDylib.path
+        environment["SIMCTL_CHILD_FAUXCAM_SOCKET"] = socketPath
         let launch = Shell.runCapturing(
             executablePath: "/usr/bin/xcrun",
             arguments: ["simctl", "launch", "--terminate-running-process", deviceIdentifier, Self.fixtureBundleIdentifier],

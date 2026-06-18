@@ -1,5 +1,6 @@
 #include "SessionSwizzle.h"
 #include "AVSwizzle.h"
+#include "FrameClient.h"
 #import "FauxBufferFactory.h"
 
 @import Foundation;
@@ -51,6 +52,8 @@ static os_log_t fauxSessionLog(void) {
     uint8_t *_sourcePixels;
     size_t _sourceBytesPerRow;
     uint32_t _sequence;
+    faux_frame_client *_frameClient;
+    BOOL _usesHostSocket;
 }
 
 - (void)start {
@@ -63,6 +66,7 @@ static os_log_t fauxSessionLog(void) {
     _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:kFrameWidth height:kFrameHeight framesPerSecond:kFramesPerSecond];
     if (!_bufferFactory) return;
     [self buildSourcePixels];
+    [self connectHostSocket];
 
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.deliveryQueue);
     uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)kFramesPerSecond;
@@ -93,21 +97,84 @@ static os_log_t fauxSessionLog(void) {
     }
 }
 
+- (void)connectHostSocket {
+    const char *socketPath = getenv("FAUXCAM_SOCKET");
+    if (!socketPath || socketPath[0] == '\0') return;
+    _frameClient = faux_frame_client_create();
+    if (_frameClient
+        && faux_frame_client_connect(_frameClient, socketPath) == 0
+        && faux_frame_client_send_hello(_frameClient) == 0) {
+        _usesHostSocket = YES;
+        os_log(fauxSessionLog(), "frame pump connected to host socket");
+        return;
+    }
+    if (_frameClient) {
+        faux_frame_client_destroy(_frameClient);
+        _frameClient = NULL;
+    }
+    os_log(fauxSessionLog(), "frame pump host socket unavailable, using synthetic frames");
+}
+
 - (void)deliverFrame {
-    id delegate = self.sampleBufferDelegate;
-    if (!delegate || !_sourcePixels) return;
+    if (_usesHostSocket) {
+        [self deliverHostFrame];
+    } else {
+        [self deliverSyntheticFrame];
+    }
+}
+
+- (void)deliverHostFrame {
+    if (faux_frame_client_send_demand(_frameClient, FAUX_POSITION_BACK, (uint32_t)kFrameWidth, (uint32_t)kFrameHeight, (uint32_t)kFramesPerSecond, FAUX_PIXEL_FORMAT_BGRA32) != 0) {
+        [self handleHostSocketFailure];
+        return;
+    }
+    faux_received_frame received;
+    if (faux_frame_client_recv_frame(_frameClient, &received) != 0) {
+        [self handleHostSocketFailure];
+        return;
+    }
+    CMSampleBufferRef sampleBuffer = NULL;
+    if (received.payload) {
+        sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:received.payload sourceBytesPerRow:received.header.bytesPerRow];
+    }
+    faux_received_frame_free(&received);
+    if (sampleBuffer) {
+        [self deliverSampleBuffer:sampleBuffer];
+        CFRelease(sampleBuffer);
+    }
+}
+
+- (void)deliverSyntheticFrame {
+    if (!_sourcePixels) return;
     CMSampleBufferRef sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:_sourcePixels sourceBytesPerRow:_sourceBytesPerRow];
-    if (!sampleBuffer) return;
+    if (sampleBuffer) {
+        [self deliverSampleBuffer:sampleBuffer];
+        CFRelease(sampleBuffer);
+    }
+}
+
+- (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    id delegate = self.sampleBufferDelegate;
+    if (!delegate) return;
     _sequence++;
     ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
         delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
         self.captureOutput, sampleBuffer, self.captureConnection);
-    CFRelease(sampleBuffer);
+}
+
+- (void)handleHostSocketFailure {
+    _usesHostSocket = NO;
+    if (_frameClient) {
+        faux_frame_client_destroy(_frameClient);
+        _frameClient = NULL;
+    }
+    os_log(fauxSessionLog(), "host socket failed, falling back to synthetic frames");
 }
 
 - (void)dealloc {
     [self stop];
     if (_sourcePixels) free(_sourcePixels);
+    if (_frameClient) faux_frame_client_destroy(_frameClient);
 }
 
 @end

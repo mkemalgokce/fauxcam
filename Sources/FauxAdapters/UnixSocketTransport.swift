@@ -30,6 +30,8 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
             let accepted = Darwin.accept(listenDescriptor, nil, nil)
             if accepted < 0 { return nil }
             clientDescriptor = accepted
+            var suppressSignalPipe: Int32 = 1
+            setsockopt(clientDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, socklen_t(MemoryLayout<Int32>.size))
         }
         if !didReadHandshake {
             guard let helloHeader = try readHeader(), helloHeader.isValid,
