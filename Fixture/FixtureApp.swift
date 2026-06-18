@@ -6,11 +6,17 @@ import os
 struct FixtureApp: App {
     private let frameProbe = CameraFrameProbe()
     private let previewProbe = CameraPreviewProbe()
+    private let metadataProbe = CameraMetadataProbe()
 
     init() {
         CameraDiscoveryProbe.run()
-        frameProbe.start()
-        if ProcessInfo.processInfo.environment["FAUXCAM_PREVIEW_PROBE"] != nil {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["FAUXCAM_METADATA_PROBE"] != nil {
+            metadataProbe.start()
+        } else {
+            frameProbe.start()
+        }
+        if environment["FAUXCAM_PREVIEW_PROBE"] != nil {
             previewProbe.start()
         }
     }
@@ -115,5 +121,35 @@ private final class CameraPreviewProbe {
         previewLayer = layer
         session.startRunning()
         os_log("preview probe started", log: Self.log)
+    }
+}
+
+private final class CameraMetadataProbe: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+    private static let log = OSLog(subsystem: "com.fauxcam", category: "probe")
+    private let session = AVCaptureSession()
+    private let metadataOutput = AVCaptureMetadataOutput()
+    private let queue = DispatchQueue(label: "com.fauxcam.fixture.metadata")
+
+    func start() {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+              let input = try? AVCaptureDeviceInput(device: camera),
+              session.canAddInput(input), session.canAddOutput(metadataOutput) else {
+            os_log("metadata setup failed", log: Self.log, type: .error)
+            return
+        }
+        session.addInput(input)
+        session.addOutput(metadataOutput)
+        metadataOutput.setMetadataObjectsDelegate(self, queue: queue)
+        metadataOutput.metadataObjectTypes = [.qr]
+        session.startRunning()
+        os_log("metadata probe started", log: Self.log)
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        for object in metadataObjects {
+            guard let code = object as? AVMetadataMachineReadableCodeObject else { continue }
+            os_log("metadata scanned type=%{public}@ value=%{public}@", log: Self.log,
+                   code.type.rawValue, code.stringValue ?? "nil")
+        }
     }
 }

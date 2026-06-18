@@ -10,6 +10,7 @@
 @import os.log;
 @import AVFoundation;
 @import CoreMedia;
+@import CoreImage;
 @import QuartzCore;
 
 static const uint8_t kSourcePixelBlue = 255;
@@ -22,6 +23,9 @@ static const void *kFakeInputDeviceKey = &kFakeInputDeviceKey;
 static const void *kOutputDelegateKey = &kOutputDelegateKey;
 static const void *kOutputQueueKey = &kOutputQueueKey;
 static const void *kSessionPreviewLayersKey = &kSessionPreviewLayersKey;
+static const void *kMetadataDelegateKey = &kMetadataDelegateKey;
+static const void *kMetadataQueueKey = &kMetadataQueueKey;
+static const void *kMetadataPumpKey = &kMetadataPumpKey;
 
 static IMP fauxNSObjectInit;
 static IMP fauxOriginalInputInit;
@@ -79,6 +83,67 @@ static os_log_t fauxSessionLog(void) {
 }
 @end
 
+// MARK: - Fake metadata object (machine-readable code)
+
+static const void *kMetadataStringKey = &kMetadataStringKey;
+
+static NSString *fauxMetadataStringValue(id self, SEL _cmd) { return objc_getAssociatedObject(self, kMetadataStringKey); }
+static AVMetadataObjectType fauxMetadataType(id self, SEL _cmd) { return AVMetadataObjectTypeQRCode; }
+static CGRect fauxMetadataBounds(id self, SEL _cmd) { return CGRectMake(0.25, 0.25, 0.5, 0.5); }
+static NSArray *fauxMetadataCorners(id self, SEL _cmd) {
+    return @[ @{@"X": @0.25, @"Y": @0.25}, @{@"X": @0.75, @"Y": @0.25}, @{@"X": @0.75, @"Y": @0.75}, @{@"X": @0.25, @"Y": @0.75} ];
+}
+static CMTime fauxMetadataTime(id self, SEL _cmd) { return CMClockGetTime(CMClockGetHostTimeClock()); }
+static CMTime fauxMetadataDuration(id self, SEL _cmd) { return kCMTimeZero; }
+
+static Class fauxMetadataObjectClass(void) {
+    static Class metadataClass;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class superClass = objc_getClass("AVMetadataMachineReadableCodeObject");
+        if (!superClass) return;
+        metadataClass = objc_allocateClassPair(superClass, "FauxMetadataMachineReadableCodeObject", 0);
+        if (!metadataClass) return;
+        NSString *rectTypes = [NSString stringWithFormat:@"%s@:", @encode(CGRect)];
+        NSString *timeTypes = [NSString stringWithFormat:@"%s@:", @encode(CMTime)];
+        class_addMethod(metadataClass, @selector(stringValue), (IMP)fauxMetadataStringValue, "@@:");
+        class_addMethod(metadataClass, @selector(type), (IMP)fauxMetadataType, "@@:");
+        class_addMethod(metadataClass, @selector(bounds), (IMP)fauxMetadataBounds, rectTypes.UTF8String);
+        class_addMethod(metadataClass, @selector(corners), (IMP)fauxMetadataCorners, "@@:");
+        class_addMethod(metadataClass, @selector(time), (IMP)fauxMetadataTime, timeTypes.UTF8String);
+        class_addMethod(metadataClass, @selector(duration), (IMP)fauxMetadataDuration, timeTypes.UTF8String);
+        objc_registerClassPair(metadataClass);
+    });
+    return metadataClass;
+}
+
+static id fauxMakeMetadataObject(NSString *string) {
+    Class metadataClass = fauxMetadataObjectClass();
+    if (!metadataClass) return nil;
+    id object = class_createInstance(metadataClass, 0);
+    objc_setAssociatedObject(object, kMetadataStringKey, string, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return object;
+}
+
+static CIDetector *fauxQRDetector(void) {
+    static CIDetector *detector;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        detector = [CIDetector detectorOfType:CIDetectorTypeQRCode context:nil
+                                      options:@{ CIDetectorAccuracy: CIDetectorAccuracyLow }];
+    });
+    return detector;
+}
+
+@interface FauxMetadataTarget : NSObject
+@property (nonatomic, weak) id delegate;
+@property (nonatomic, strong) dispatch_queue_t queue;
+@property (nonatomic, strong) id output;
+@property (nonatomic, strong) id connection;
+@end
+@implementation FauxMetadataTarget
+@end
+
 // MARK: - Frame pump
 
 @interface FauxFramePump : NSObject
@@ -90,6 +155,8 @@ static os_log_t fauxSessionLog(void) {
 - (void)startIfReady;
 - (void)stop;
 - (void)registerPreviewLayer:(CALayer *)previewLayer;
+- (void)registerMetadataDelegate:(id)delegate queue:(dispatch_queue_t)queue output:(id)output connection:(id)connection;
+- (CVPixelBufferRef)copyLatestImageBuffer CF_RETURNS_RETAINED;
 @end
 
 @implementation FauxFramePump {
@@ -103,10 +170,13 @@ static os_log_t fauxSessionLog(void) {
     BOOL _usesHostSocket;
     BOOL _startRequested;
     BOOL _loggedPreviewDelivery;
+    BOOL _loggedMetadataDelivery;
     int32_t _frameWidth;
     int32_t _frameHeight;
     int32_t _framesPerSecond;
+    CVPixelBufferRef _latestImageBuffer;
     NSMutableArray<FauxPreviewTarget *> *_previewTargets;
+    NSMutableArray<FauxMetadataTarget *> *_metadataTargets;
 }
 
 - (void)registerPreviewLayer:(CALayer *)previewLayer {
@@ -122,9 +192,67 @@ static os_log_t fauxSessionLog(void) {
     [self startIfReady];
 }
 
+- (void)registerMetadataDelegate:(id)delegate queue:(dispatch_queue_t)queue output:(id)output connection:(id)connection {
+    if (!delegate || !queue) return;
+    @synchronized(self) {
+        if (!_metadataTargets) _metadataTargets = [NSMutableArray array];
+        for (FauxMetadataTarget *existing in _metadataTargets) {
+            if (existing.delegate == delegate) return;
+        }
+        FauxMetadataTarget *target = [[FauxMetadataTarget alloc] init];
+        target.delegate = delegate;
+        target.queue = queue;
+        target.output = output;
+        target.connection = connection;
+        [_metadataTargets addObject:target];
+        os_log(fauxSessionLog(), "metadata delegate registered");
+    }
+    [self startIfReady];
+}
+
 - (BOOL)hasConsumer {
     if (self.sampleBufferDelegate && self.deliveryQueue) return YES;
-    @synchronized(self) { return _previewTargets.count > 0; }
+    @synchronized(self) { return _previewTargets.count > 0 || _metadataTargets.count > 0; }
+}
+
+- (void)scanMetadataIfNeeded {
+    if (_sequence % 6 != 0) return;
+    NSArray<FauxMetadataTarget *> *targets;
+    @synchronized(self) {
+        if (_metadataTargets.count == 0) return;
+        targets = [_metadataTargets copy];
+    }
+    CVPixelBufferRef buffer = [self copyLatestImageBuffer];
+    if (!buffer) { os_log(fauxSessionLog(), "metadata scan: no latest buffer"); return; }
+    NSArray *features = [fauxQRDetector() featuresInImage:[CIImage imageWithCVPixelBuffer:buffer]];
+    CVPixelBufferRelease(buffer);
+
+    NSMutableArray *objects = [NSMutableArray array];
+    for (CIQRCodeFeature *feature in features) {
+        if (feature.messageString.length == 0) continue;
+        id metadataObject = fauxMakeMetadataObject(feature.messageString);
+        if (metadataObject) [objects addObject:metadataObject];
+    }
+    if (objects.count == 0) return;
+    if (!_loggedMetadataDelivery) {
+        _loggedMetadataDelivery = YES;
+        os_log(fauxSessionLog(), "metadata objects delivered count=%lu", (unsigned long)objects.count);
+    }
+
+    for (FauxMetadataTarget *target in targets) {
+        id delegate = target.delegate;
+        dispatch_queue_t queue = target.queue;
+        id output = target.output;
+        id connection = target.connection;
+        if (!delegate || !queue) continue;
+        dispatch_async(queue, ^{
+            if ([delegate respondsToSelector:@selector(captureOutput:didOutputMetadataObjects:fromConnection:)]) {
+                ((void (*)(id, SEL, id, NSArray *, id))objc_msgSend)(
+                    delegate, @selector(captureOutput:didOutputMetadataObjects:fromConnection:),
+                    output, objects, connection);
+            }
+        });
+    }
 }
 
 - (void)start {
@@ -254,6 +382,14 @@ static os_log_t fauxSessionLog(void) {
 
 - (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     _sequence++;
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (imageBuffer) {
+        @synchronized(self) {
+            CVPixelBufferRef previous = _latestImageBuffer;
+            _latestImageBuffer = (CVPixelBufferRef)CVPixelBufferRetain((CVPixelBufferRef)imageBuffer);
+            if (previous) CVPixelBufferRelease(previous);
+        }
+    }
     NSArray<FauxPreviewTarget *> *previewTargets;
     @synchronized(self) {
         previewTargets = _previewTargets.count > 0 ? [_previewTargets copy] : nil;
@@ -283,6 +419,7 @@ static os_log_t fauxSessionLog(void) {
     }
 
     if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets];
+    [self scanMetadataIfNeeded];
 }
 
 - (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer targets:(NSArray<FauxPreviewTarget *> *)targets {
@@ -308,10 +445,19 @@ static os_log_t fauxSessionLog(void) {
     os_log(fauxSessionLog(), "host socket failed, falling back to synthetic frames");
 }
 
+- (CVPixelBufferRef)copyLatestImageBuffer CF_RETURNS_RETAINED {
+    @synchronized(self) {
+        return _latestImageBuffer ? (CVPixelBufferRef)CVPixelBufferRetain(_latestImageBuffer) : NULL;
+    }
+}
+
+- (dispatch_queue_t)pumpQueue { return _pumpQueue; }
+
 - (void)dealloc {
     [self stop];
     if (_sourcePixels) free(_sourcePixels);
     if (_frameClient) faux_frame_client_destroy(_frameClient);
+    if (_latestImageBuffer) CVPixelBufferRelease(_latestImageBuffer);
 }
 
 @end
@@ -355,6 +501,19 @@ static void fauxSetSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch
     objc_setAssociatedObject(self, kOutputQueueKey, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+static void fauxSetMetadataDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
+    objc_setAssociatedObject(self, kMetadataDelegateKey, delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, kMetadataQueueKey, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    FauxFramePump *pump = objc_getAssociatedObject(self, kMetadataPumpKey);
+    if (pump && delegate && queue) {
+        [pump registerMetadataDelegate:delegate queue:queue output:self connection:fauxMakeConnection()];
+    }
+}
+
+static NSArray *fauxMetadataAvailableTypes(id self, SEL _cmd) {
+    return @[ AVMetadataObjectTypeQRCode ];
+}
+
 static BOOL fauxInputIsFake(id input) {
     return objc_getAssociatedObject(input, kFakeInputDeviceKey) != nil;
 }
@@ -377,6 +536,16 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
         pump.deliveryQueue = objc_getAssociatedObject(output, kOutputQueueKey);
         objc_setAssociatedObject(output, kOutputDelegateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pump startIfReady];
+        return;
+    }
+    if ([output isKindOfClass:objc_getClass("AVCaptureMetadataOutput")]) {
+        FauxFramePump *pump = fauxPumpForSession(self);
+        objc_setAssociatedObject(output, kMetadataPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        id delegate = objc_getAssociatedObject(output, kMetadataDelegateKey);
+        dispatch_queue_t queue = objc_getAssociatedObject(output, kMetadataQueueKey);
+        if (delegate && queue) {
+            [pump registerMetadataDelegate:delegate queue:queue output:output connection:fauxMakeConnection()];
+        }
         return;
     }
     if (fauxOriginalAddOutput) {
@@ -456,6 +625,11 @@ void FauxInstallCaptureSession(void) {
         Class previewClass = objc_getClass("AVCaptureVideoPreviewLayer");
         if (previewClass) {
             fauxOriginalPreviewSetSession = fauxReplaceInstanceMethod(previewClass, @selector(setSession:), (IMP)fauxPreviewSetSession, "v@:@");
+        }
+        Class metadataClass = objc_getClass("AVCaptureMetadataOutput");
+        if (metadataClass) {
+            fauxReplaceInstanceMethod(metadataClass, @selector(setMetadataObjectsDelegate:queue:), (IMP)fauxSetMetadataDelegate, "v@:@@");
+            fauxReplaceInstanceMethod(metadataClass, @selector(availableMetadataObjectTypes), (IMP)fauxMetadataAvailableTypes, "@@:");
         }
         os_log(fauxSessionLog(), "capture session interception installed");
     });
