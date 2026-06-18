@@ -77,11 +77,38 @@ echo "==> Signed bundle at $STAGE (hardened runtime + camera entitlement)"
 if [[ "$IDENTITY" == "-" ]]; then
   cat <<'NOTE'
 
-NOTE: ad-hoc signed (local use only). To notarize for distribution, re-run with a
-Developer ID, then:
-
-  ditto -c -k --keepParent dist/FauxCam.app dist/FauxCam.zip
-  xcrun notarytool submit dist/FauxCam.zip --keychain-profile <profile> --wait
-  xcrun stapler staple dist/FauxCam.app
+NOTE: ad-hoc signed (local use only — Gatekeeper will block it on other Macs).
+To ship to production:
+  1. Get a "Developer ID Application" certificate (paid Apple Developer account).
+  2. Store notarization credentials once (app-specific password from appleid.apple.com):
+       xcrun notarytool store-credentials fauxcam-notary \
+         --apple-id you@example.com --team-id TEAMID --password app-specific-password
+  3. Build + notarize + make a DMG in one shot:
+       NOTARIZE_PROFILE=fauxcam-notary ./Scripts/sign-app.sh \
+         "Developer ID Application: Your Name (TEAMID)"
 NOTE
+else
+  echo "==> Distribution build with Developer ID"
+  if [[ -n "${NOTARIZE_PROFILE:-}" ]]; then
+    echo "==> Submitting for notarization (this contacts Apple and waits)"
+    ZIP="$ROOT/dist/FauxCam.zip"
+    ditto -c -k --keepParent "$STAGE" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARIZE_PROFILE" --wait
+    xcrun stapler staple "$STAGE"
+    xcrun stapler validate "$STAGE"
+    rm -f "$ZIP"
+    echo "==> Notarized + stapled"
+  else
+    echo "NOTE: Developer ID signed but NOT notarized. Set NOTARIZE_PROFILE=<profile> to notarize."
+  fi
+
+  echo "==> Building DMG"
+  DMG="$ROOT/dist/FauxCam.dmg"
+  DMG_STAGE="$ROOT/dist/.dmg-stage"
+  rm -f "$DMG"; rm -rf "$DMG_STAGE"; mkdir -p "$DMG_STAGE"
+  cp -R "$STAGE" "$DMG_STAGE/$APP_NAME"
+  ln -s /Applications "$DMG_STAGE/Applications"
+  hdiutil create -volname "FauxCam" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG" >/dev/null
+  rm -rf "$DMG_STAGE"
+  echo "==> DMG at $DMG"
 fi

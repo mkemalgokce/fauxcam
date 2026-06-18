@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let preview = PreviewStreamer()
     let appIcons = AppIconStore()
     let autoMode = AutoModeController()
+    let settings = AppSettings()
 
     func applicationWillTerminate(_ notification: Notification) {
         controller.stopSynchronously()
@@ -26,12 +27,16 @@ struct FauxCamApp: App {
         MenuBarExtra {
             RootView(controller: appDelegate.controller, camera: appDelegate.camera,
                      preview: appDelegate.preview, appIcons: appDelegate.appIcons,
-                     autoMode: appDelegate.autoMode)
+                     autoMode: appDelegate.autoMode, settings: appDelegate.settings)
                 .frame(width: 360)
         } label: {
             Image(nsImage: Self.menuBarIcon)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(settings: appDelegate.settings, autoMode: appDelegate.autoMode, controller: appDelegate.controller)
+        }
     }
 
     private static var menuBarIcon: NSImage {
@@ -58,7 +63,9 @@ struct RootView: View {
     @ObservedObject var preview: PreviewStreamer
     @ObservedObject var appIcons: AppIconStore
     @ObservedObject var autoMode: AutoModeController
+    @ObservedObject var settings: AppSettings
     @State private var confirmingAutoMode = false
+    @State private var didCleanLeftover = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     private var simulatorSelection: Binding<String?> {
@@ -69,6 +76,26 @@ struct RootView: View {
     }
 
     var body: some View {
+        Group {
+            if settings.hasOnboarded {
+                mainContent
+            } else {
+                OnboardingView(settings: settings)
+            }
+        }
+        .onAppear {
+            controller.refresh()
+            camera.refresh()
+            appIcons.load(controller.installedApps, on: controller.selectedUDID)
+        }
+        .onChange(of: controller.devices) { _, devices in
+            let udids = devices.map(\.udid)
+            autoMode.syncDevices(udids)
+            if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 12) {
             ViewfinderCard(controller: controller, camera: camera, preview: preview)
                 .padding(.horizontal, 16)
@@ -82,9 +109,10 @@ struct RootView: View {
             .padding(.horizontal, 16)
 
             ActionBar(controller: controller)
+            footer
         }
         .alert("Enable auto-inject?", isPresented: $confirmingAutoMode) {
-            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region, deviceUDIDs: controller.devices.map(\.udid)) }
+            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region, deviceUDIDs: controller.devices.map(\.udid), width: settings.autoWidth, height: settings.autoHeight, fps: settings.autoFps) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("FauxCam sets a launchd variable in your booted simulators so every app you launch — tapped open or run from Xcode — loads the fake camera, no Start needed. It touches no files on your Mac, is unset when you turn this off or quit FauxCam, and clears on simulator reboot. Relaunch already-running apps to apply.")
@@ -104,12 +132,29 @@ struct RootView: View {
         .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
-        .onChange(of: controller.devices) { _, devices in autoMode.syncDevices(devices.map(\.udid)) }
         .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
         .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button { openSettings() } label: { Label("Settings", systemImage: "gearshape") }
+                .buttonStyle(.borderless).controlSize(.small)
+            Spacer()
+            Button("Quit") { NSApplication.shared.terminate(nil) }
+                .buttonStyle(.borderless).controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+    }
+
+    /// A menu-bar-only app must activate itself before the Settings window will come to the front.
+    private func openSettings() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func sourceChanged() {
