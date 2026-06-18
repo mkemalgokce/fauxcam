@@ -25,6 +25,7 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     private var reader: AVAssetReader?
     private var trackOutput: AVAssetReaderTrackOutput?
     private var hasLoggedFailure = false
+    private var permanentlyFailed = false
 
     public init(url: URL, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.url = url
@@ -32,6 +33,7 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
+        if permanentlyFailed { return blackFrame(for: demand, clock: clock) }
         do {
             let sampleBuffer = try nextSampleBuffer()
             guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
@@ -49,6 +51,10 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
                 log.error("video source failed, serving black frames: \(String(describing: error))")
                 hasLoggedFailure = true
             }
+            // A file's decode failure is permanent: stop re-creating the reader every frame.
+            permanentlyFailed = true
+            reader = nil
+            trackOutput = nil
             return blackFrame(for: demand, clock: clock)
         }
     }
@@ -56,7 +62,13 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     private func nextSampleBuffer() throws -> CMSampleBuffer {
         if reader == nil { try startReading() }
         if let sample = trackOutput?.copyNextSampleBuffer() { return sample }
-        if reader?.status == .failed { throw reader?.error ?? VideoFileSourceError.decodeFailed }
+        if let reader, reader.status == .failed {
+            let failure = reader.error ?? VideoFileSourceError.decodeFailed
+            self.reader = nil
+            self.trackOutput = nil
+            throw failure
+        }
+        // End of stream — loop from the start.
         try startReading()
         guard let sample = trackOutput?.copyNextSampleBuffer() else { throw VideoFileSourceError.emptyVideo }
         return sample

@@ -2,13 +2,13 @@ import Testing
 import Foundation
 @testable import FauxAdapters
 
-@Test func factoryDefaultsToImageSource() {
-    #expect(FrameSourceFactory().make("image") is ImageSource)
+@Test func factoryMakesTestImageForImageSpec() {
+    #expect(FrameSourceFactory().make("image") is CustomImageSource)
     #expect(FrameSourceFactory().make("unknown-spec") is ImageSource)
 }
 
-@Test func factoryFallsBackToImageForMissingVideoFile() {
-    #expect(FrameSourceFactory().make("video:/no/such/file.mov") is ImageSource)
+@Test func factoryFallsBackToTestImageForMissingVideoFile() {
+    #expect(FrameSourceFactory().make("video:/no/such/file.mov") is CustomImageSource)
 }
 
 @Test func factoryMakesVideoSourceForExistingFile() throws {

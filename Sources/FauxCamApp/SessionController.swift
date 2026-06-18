@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
+import AppKit
 import AVFoundation
+import UniformTypeIdentifiers
 import FauxDomain
 import FauxAdapters
 
@@ -50,7 +52,9 @@ final class SessionController: ObservableObject {
     @Published var installedApps: [InstalledApp] = []
     @Published var bundleIdentifier: String = ""
     @Published var sourceKind: SourceKind = .image
-    @Published var sourceDetail: String = ""
+    @Published var imagePath: String = ""
+    @Published var videoPath: String = ""
+    @Published var qrText: String = ""
     @Published var isRunning: Bool = false
     @Published var isBusy: Bool = false
     @Published var status: String = "Ready when you are."
@@ -85,21 +89,28 @@ final class SessionController: ObservableObject {
     var startBlockReason: String? {
         if selectedDevice == nil { return "Boot and select a simulator to start." }
         if bundleIdentifier.isEmpty { return "Choose a target app to start." }
-        if sourceKind.needsDetail && sourceDetail.isEmpty {
-            return sourceKind == .video ? "Choose a video file to start." : "Enter QR text to start."
-        }
-        if sourceKind == .webcam && AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+        switch sourceKind {
+        case .image where !imagePath.isEmpty && !FileManager.default.fileExists(atPath: imagePath):
+            return "That image file is missing — pick another."
+        case .video where videoPath.isEmpty:
+            return "Choose a video file to start."
+        case .video where !FileManager.default.fileExists(atPath: videoPath):
+            return "That video file is missing — pick another."
+        case .qr where qrText.isEmpty:
+            return "Enter QR text to start."
+        case .webcam where AVCaptureDevice.authorizationStatus(for: .video) != .authorized:
             return "Allow camera access to start."
+        default:
+            return nil
         }
-        return nil
     }
 
     var resolvedSourceSpec: String {
         switch sourceKind {
-        case .image: return "image"
+        case .image: return imagePath.isEmpty ? "image" : "image:\(imagePath)"
         case .webcam: return "webcam"
-        case .video: return "video:\(sourceDetail)"
-        case .qr: return "qr:\(sourceDetail)"
+        case .video: return "video:\(videoPath)"
+        case .qr: return "qr:\(qrText)"
         }
     }
 
@@ -122,6 +133,22 @@ final class SessionController: ObservableObject {
         guard udid != selectedUDID else { return }
         selectedUDID = udid
         refreshInstalledApps()
+    }
+
+    func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .gif, .bmp, .image]
+        panel.canChooseDirectories = false
+        panel.prompt = "Use Image"
+        if panel.runModal() == .OK, let url = panel.url { imagePath = url.path }
+    }
+
+    func chooseVideo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
+        panel.canChooseDirectories = false
+        panel.prompt = "Use Video"
+        if panel.runModal() == .OK, let url = panel.url { videoPath = url.path }
     }
 
     func refreshInstalledApps() {

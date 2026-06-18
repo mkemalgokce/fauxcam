@@ -3,6 +3,8 @@ import OSLog
 import FauxDomain
 
 public struct FrameSourceFactory {
+    public static let imageToken = "image"
+    public static let imagePrefix = "image:"
     public static let webcamToken = "webcam"
     public static let videoPrefix = "video:"
     public static let qrPrefix = "qr:"
@@ -17,16 +19,28 @@ public struct FrameSourceFactory {
         }
         if spec == Self.webcamToken {
             if let webcam = WebcamSource() { return webcam }
-            Self.log.error("no camera available; falling back to image source")
-            return ImageSource(solidColor: Self.defaultColor)
+            Self.log.error("no camera available; falling back to test image")
+            return CustomImageSource(ciImage: CustomImageSource.builtInTestImage())
         }
         if spec.hasPrefix(Self.videoPrefix) {
             let path = String(spec.dropFirst(Self.videoPrefix.count))
             guard FileManager.default.fileExists(atPath: path) else {
-                Self.log.error("video file not found at \(path, privacy: .public); falling back to image source")
-                return ImageSource(solidColor: Self.defaultColor)
+                Self.log.error("video file not found at \(path, privacy: .public); falling back to test image")
+                return CustomImageSource(ciImage: CustomImageSource.builtInTestImage())
             }
             return VideoFileSource(url: URL(fileURLWithPath: path))
+        }
+        if spec.hasPrefix(Self.imagePrefix) {
+            let path = String(spec.dropFirst(Self.imagePrefix.count))
+            if FileManager.default.fileExists(atPath: path),
+               let image = CustomImageSource(contentsOf: URL(fileURLWithPath: path)) {
+                return image
+            }
+            Self.log.error("image file not found/unreadable at \(path, privacy: .public); falling back to test image")
+            return CustomImageSource(ciImage: CustomImageSource.builtInTestImage())
+        }
+        if spec == Self.imageToken {
+            return CustomImageSource(ciImage: CustomImageSource.builtInTestImage())
         }
         return ImageSource(solidColor: Self.defaultColor)
     }

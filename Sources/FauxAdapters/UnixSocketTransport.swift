@@ -84,8 +84,18 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
     public func close() {
         descriptorLock.lock()
         defer { descriptorLock.unlock() }
-        if clientDescriptor >= 0 { Darwin.close(clientDescriptor); clientDescriptor = -1 }
-        if listenDescriptor >= 0 { Darwin.close(listenDescriptor); listenDescriptor = -1 }
+        // shutdown() before close() wakes a server thread parked in accept()/read() so teardown
+        // does not rely on the fd close alone (which does not reliably unblock on Darwin).
+        if clientDescriptor >= 0 {
+            Darwin.shutdown(clientDescriptor, SHUT_RDWR)
+            Darwin.close(clientDescriptor)
+            clientDescriptor = -1
+        }
+        if listenDescriptor >= 0 {
+            Darwin.shutdown(listenDescriptor, SHUT_RDWR)
+            Darwin.close(listenDescriptor)
+            listenDescriptor = -1
+        }
         unlink(path)
     }
 
