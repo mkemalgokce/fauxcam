@@ -28,7 +28,9 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 
 | 7 | Camera-output coverage | guest hooks `AVCaptureMetadataOutput` (QR/barcode scanners — CIDetector + fake `AVMetadataMachineReadableCodeObject`), `AVCapturePhotoOutput` (fake `AVCapturePhoto`/`AVCaptureResolvedPhotoSettings`, JPEG of the current frame), front-camera preview mirroring, configurable resolution/fps; fixes a latent crash where constructing `AVCapturePhotoOutput` under FauxCam SIGSEGV'd, and crash-proofs the fake result objects (benign getters + safe `FauxCaptureConnection`). | ✅ DONE (merged main; QR-scan + photo-capture + mirror proven live, 62 tests, review fixed) |
 
-**Core phases (0–7) DONE — FauxCam is a complete, working, reviewed product** covering AVFoundation data-output, preview-layer, photo-capture, and metadata-scanner apps. Remaining optional extensions (not implemented): `AVCaptureMovieFileOutput` (recording), `UIImagePickerController` (high-level system camera UI), and the original "Fig layer" low-level capture hooks.
+| 8 | Menubar app redesign | distinctive dark instrument-panel UI; target app PICKED from the simulator's installed apps (`InstalledAppProviding` + `SimctlInstalledAppProvider`); live self-view (`AVCaptureVideoPreviewLayer` viewfinder, mirrored — "see yourself"); in-app camera permission flow gating the webcam feed; off-main `start`/`stop`/refresh + synchronous teardown on quit; packaging adds `NSCameraUsageDescription` + the camera entitlement. | ✅ DONE (merged main; signed app launches clean, 66 tests, two review rounds fixed) |
+
+**Core phases (0–8) DONE — FauxCam is a complete, working, reviewed product** covering AVFoundation data-output, preview-layer, photo-capture, and metadata-scanner apps, with a polished menu bar app (installed-app picker, live self-view, camera-permission flow). Remaining optional extensions (not implemented): `AVCaptureMovieFileOutput` (recording), `UIImagePickerController` (high-level system camera UI), and the original "Fig layer" low-level capture hooks.
 | 6 | Fig layer | `FigCaptureSession` hooks for low-level capture clients (RN/Flutter/WebRTC). | ⬜ TODO |
 
 ## Control notes

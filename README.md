@@ -69,7 +69,12 @@ Not supported: `AVCaptureMovieFileOutput` (video recording) and `UIImagePickerCo
 
 ## Menubar app
 
-`swift run FauxCamApp` launches a menubar app: pick a booted simulator, enter the app's bundle id, choose a source, Start/Stop. (Requires a desktop session.)
+A dark instrument-panel menu bar app. Build the signed bundle with `./Scripts/sign-app.sh` and open `dist/FauxCam.app` (or `swift run FauxCamApp` for a dev build; requires a desktop session).
+
+- **Viewfinder** — a live preview of what the simulator will receive. For the webcam source it shows the Mac camera mirrored, so you see yourself.
+- **Pick the target app** — choose from the simulator's installed apps (no typing a bundle id).
+- **Camera permission** — the viewfinder requests Mac camera access in-app; the webcam source only streams once it's granted (the packaged app ships `NSCameraUsageDescription` + the camera entitlement).
+- Pick a booted simulator and a source (image / webcam / video / QR), then Start/Stop.
 
 ## Architecture
 
