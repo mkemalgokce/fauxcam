@@ -72,7 +72,6 @@ struct RootView: View {
             VStack(spacing: 12) {
                 destinationSection
                 sourceSection
-                zoomSection
             }
             .padding(.horizontal, 16)
 
@@ -86,10 +85,10 @@ struct RootView: View {
             preview.start()
         }
         .onDisappear { preview.stop() }
-        .onChange(of: controller.sourceKind) { _, _ in reconfigurePreview() }
-        .onChange(of: controller.imagePath) { _, _ in reconfigurePreview() }
-        .onChange(of: controller.videoPath) { _, _ in reconfigurePreview() }
-        .onChange(of: controller.qrText) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.sourceKind) { _, _ in sourceChanged() }
+        .onChange(of: controller.imagePath) { _, _ in sourceChanged() }
+        .onChange(of: controller.videoPath) { _, _ in sourceChanged() }
+        .onChange(of: controller.qrText) { _, _ in sourceChanged() }
         .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
@@ -98,6 +97,11 @@ struct RootView: View {
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
+    }
+
+    private func sourceChanged() {
+        reconfigurePreview()
+        controller.applyLiveSource()
     }
 
     private func reconfigurePreview() {
@@ -188,35 +192,6 @@ struct RootView: View {
     }
 
     // MARK: Zoom
-
-    @ViewBuilder private var zoomSection: some View {
-        if controller.sourceKind.supportsFraming {
-            GroupBox {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    Text("Scroll or pinch over the preview to zoom; drag to move.")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    Spacer()
-                    Text(magnificationText)
-                        .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
-                    if controller.region.zoom != 1 || !controller.region.isCentered {
-                        Button { controller.region = CropRegion() } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.borderless).help("Reset framing")
-                    }
-                    if controller.aspectChangedWhileRunning {
-                        Button("Apply") { controller.restart() }
-                            .buttonStyle(.borderedProminent).controlSize(.small)
-                    }
-                }
-            }
-        }
-    }
-
-    private var magnificationText: String {
-        String(format: "%.1f×", controller.region.zoom)
-    }
 }
 
 // MARK: - App icon
@@ -277,6 +252,21 @@ struct ViewfinderCard: View {
                     .help("Streaming frames to the app. Press Stop to tear down.")
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if controller.sourceKind.supportsFraming && !needsCameraPermission {
+                zoomBadge.padding(10)
+            }
+        }
+        .overlay(alignment: .top) {
+            if controller.aspectChangedWhileRunning {
+                Button { controller.restart() } label: {
+                    Label("Apply \(controller.outputSize.width)×\(controller.outputSize.height)", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent).controlSize(.small).padding(10)
+                .help("Relaunch at the new device size")
+            }
+        }
         .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
@@ -306,6 +296,25 @@ struct ViewfinderCard: View {
             }
             .buttonStyle(.glass)
         }
+    }
+
+    private var zoomBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass").font(.caption2.weight(.semibold))
+            Text(String(format: "%.1f×", controller.region.zoom))
+                .font(.caption.monospacedDigit().weight(.semibold))
+            if controller.region.zoom != 1 || !controller.region.isCentered {
+                Divider().frame(height: 11)
+                Button { controller.region = CropRegion() } label: {
+                    Image(systemName: "arrow.counterclockwise").font(.caption2.weight(.semibold))
+                }
+                .buttonStyle(.plain).help("Reset framing")
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .glassEffect(.regular, in: .capsule)
+        .help("Scroll or pinch over the preview to zoom; drag to move")
     }
 
     private func applyZoom(_ factor: Double) {

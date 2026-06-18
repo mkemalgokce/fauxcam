@@ -287,6 +287,14 @@ final class SessionController: ObservableObject {
         }
     }
 
+    /// Switches the running stream to the currently-selected source (image ⇄ video ⇄ camera ⇄ QR)
+    /// without relaunching the app — the frame size is fixed at launch, only the content changes.
+    func applyLiveSource() {
+        guard isRunning, !isBusy else { return }
+        session.setSourceDescriptor(sourceDescriptor)
+        status = "serving \(sourceKind.title) → \(bundleIdentifier)"
+    }
+
     /// Re-launches the session at the current resolution (a running app can't change its advertised
     /// camera format live, so a new size needs a relaunch). Crop/pan, by contrast, applies live.
     /// The teardown runs off the main actor so the menu bar never freezes.

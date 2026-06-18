@@ -50,6 +50,7 @@ public final class FauxRunSession: @unchecked Sendable {
     private var serverThread: Thread?
     private var device: SimDevice?
     private var bundleIdentifier: String?
+    private var switchableSource: SwitchableFrameSource?
 
     public init(
         runSimctl: @escaping ([String], [String: String]?) -> Int32,
@@ -65,7 +66,8 @@ public final class FauxRunSession: @unchecked Sendable {
 
         let transport = try UnixSocketTransport(listeningAt: configuration.socketPath)
         let source = sourceFactory.make(descriptor, crop: { [cropBox] in cropBox.value })
-        let coordinator = StreamCoordinator(source: source, transport: transport)
+        let switchableSource = SwitchableFrameSource(source)
+        let coordinator = StreamCoordinator(source: switchableSource, transport: transport)
         let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
         serverThread.start()
 
@@ -85,6 +87,14 @@ public final class FauxRunSession: @unchecked Sendable {
         self.serverThread = serverThread
         self.device = device
         self.bundleIdentifier = bundleIdentifier
+        self.switchableSource = switchableSource
+    }
+
+    /// Swaps the running source live (image ⇄ video ⇄ camera ⇄ QR) without relaunching the app.
+    /// The frame size stays fixed (the guest advertised it at launch), so only the content changes.
+    public func setSourceDescriptor(_ descriptor: SourceDescriptor) {
+        let source = sourceFactory.make(descriptor, crop: { [cropBox] in cropBox.value })
+        switchableSource?.setSource(source)
     }
 
     public func stop() {
@@ -97,6 +107,7 @@ public final class FauxRunSession: @unchecked Sendable {
         }
         device = nil
         bundleIdentifier = nil
+        switchableSource = nil
     }
 
     /// Live crop/pan applied to the running source (image/video) on the next pulled frame.
