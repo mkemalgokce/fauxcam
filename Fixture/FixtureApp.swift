@@ -5,10 +5,14 @@ import os
 @main
 struct FixtureApp: App {
     private let frameProbe = CameraFrameProbe()
+    private let previewProbe = CameraPreviewProbe()
 
     init() {
         CameraDiscoveryProbe.run()
         frameProbe.start()
+        if ProcessInfo.processInfo.environment["FAUXCAM_PREVIEW_PROBE"] != nil {
+            previewProbe.start()
+        }
     }
 
     var body: some Scene {
@@ -90,5 +94,26 @@ private final class CameraFrameProbe: NSObject, AVCaptureVideoDataOutputSampleBu
         let offset = (height / 2) * bytesPerRow + (width / 2) * 4
         let pointer = base.advanced(by: offset).assumingMemoryBound(to: UInt8.self)
         return (blue: Int(pointer[0]), green: Int(pointer[1]), red: Int(pointer[2]))
+    }
+}
+
+private final class CameraPreviewProbe {
+    private static let log = OSLog(subsystem: "com.fauxcam", category: "probe")
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+
+    func start() {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+              let input = try? AVCaptureDeviceInput(device: camera),
+              session.canAddInput(input) else {
+            os_log("preview setup failed: no back device or input", log: Self.log, type: .error)
+            return
+        }
+        session.addInput(input)
+        let layer = AVCaptureVideoPreviewLayer()
+        layer.session = session
+        previewLayer = layer
+        session.startRunning()
+        os_log("preview probe started", log: Self.log)
     }
 }

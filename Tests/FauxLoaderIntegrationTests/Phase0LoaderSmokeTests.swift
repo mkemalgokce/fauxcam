@@ -428,4 +428,29 @@ struct HostFedFrameDeliverySmoke {
     }
 }
 
+// MARK: - Phase 6: preview-layer delivery (preview-only apps)
+
+@Suite("Phase 6: preview-layer delivery", .enabled(if: BootedSimulatorGate.isSatisfied, Comment(rawValue: BootedSimulatorGate.skipReason)))
+struct PreviewLayerSmoke {
+    private static let fixtureBundleIdentifier =
+        ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
+    private static let registeredNeedle = "preview layer registered"
+    private static let deadlineSeconds: TimeInterval = 25
+
+    @Test("injected guest registers an app-owned AVCaptureVideoPreviewLayer (preview-only app)")
+    func injectedGuestRegistersAppPreviewLayer() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        SimulatorFixtureHarness.buildAndInstall(onto: deviceIdentifier)
+        let captured = SimulatorFixtureHarness.launchAndCapture(
+            deviceIdentifier: deviceIdentifier, bundleIdentifier: Self.fixtureBundleIdentifier,
+            logCategory: "session",
+            childEnvironment: [
+                "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES": RepositoryLayout.distributedDylib.path,
+                "SIMCTL_CHILD_FAUXCAM_PREVIEW_PROBE": "1"
+            ],
+            untilContains: Self.registeredNeedle, deadlineSeconds: Self.deadlineSeconds)
+        #expect(captured.contains(Self.registeredNeedle), Comment(rawValue: "expected preview layer registration; captured:\n\(captured)"))
+    }
+}
+
 }

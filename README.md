@@ -43,6 +43,15 @@ swift run faux run --device <udid> com.example.MyApp --source image
 
 Lower-level: `faux serve [socket] [--source <source>]` runs only the frame server (you launch the app yourself with `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` + `SIMCTL_CHILD_FAUXCAM_SOCKET`).
 
+## Supported apps
+
+The target app must open the camera through **AVFoundation**. Both common paths work:
+
+- `AVCaptureSession` + `AVCaptureVideoDataOutput` (a frame-delegate) — frames arrive in `captureOutput:didOutputSampleBuffer:fromConnection:`.
+- `AVCaptureVideoPreviewLayer` (live preview, no data output) — FauxCam overlays an `AVSampleBufferDisplayLayer` on the app's preview layer and drives it, so the preview shows the source.
+
+Not yet supported: `AVCapturePhotoOutput` (still photo capture), `AVCaptureMetadataOutput` (metadata-only QR/barcode scanners), and `UIImagePickerController(sourceType: .camera)` (the high-level system camera UI, which the Simulator reports as unavailable).
+
 ## Menubar app
 
 `swift run FauxCamApp` launches a menubar app: pick a booted simulator, enter the app's bundle id, choose a source, Start/Stop. (Requires a desktop session.)

@@ -9,6 +9,7 @@
 @import os.log;
 @import AVFoundation;
 @import CoreMedia;
+@import QuartzCore;
 
 static const int32_t kFrameWidth = 1280;
 static const int32_t kFrameHeight = 720;
@@ -22,11 +23,13 @@ static const void *kSessionPumpKey = &kSessionPumpKey;
 static const void *kFakeInputDeviceKey = &kFakeInputDeviceKey;
 static const void *kOutputDelegateKey = &kOutputDelegateKey;
 static const void *kOutputQueueKey = &kOutputQueueKey;
+static const void *kSessionPreviewLayersKey = &kSessionPreviewLayersKey;
 
 static IMP fauxNSObjectInit;
 static IMP fauxOriginalInputInit;
 static IMP fauxOriginalAddInput;
 static IMP fauxOriginalAddOutput;
+static IMP fauxOriginalPreviewSetSession;
 
 static os_log_t fauxSessionLog(void) {
     static os_log_t log;
@@ -34,6 +37,47 @@ static os_log_t fauxSessionLog(void) {
     dispatch_once(&once, ^{ log = os_log_create("com.fauxcam", "session"); });
     return log;
 }
+
+// MARK: - Preview target
+
+/// Displays the pump's frames over an app-owned AVCaptureVideoPreviewLayer by overlaying
+/// an AVSampleBufferDisplayLayer, so preview-only apps (no AVCaptureVideoDataOutput) see frames.
+@interface FauxPreviewTarget : NSObject
+@property (nonatomic, weak) CALayer *previewLayer;
+@property (nonatomic, strong) AVSampleBufferDisplayLayer *displayLayer;
+- (instancetype)initWithPreviewLayer:(CALayer *)previewLayer;
+- (void)enqueue:(CMSampleBufferRef)sampleBuffer;
+@end
+
+@implementation FauxPreviewTarget
+- (instancetype)initWithPreviewLayer:(CALayer *)previewLayer {
+    self = [super init];
+    if (self) {
+        _previewLayer = previewLayer;
+        _displayLayer = [[AVSampleBufferDisplayLayer alloc] init];
+        _displayLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    }
+    return self;
+}
+
+- (void)enqueue:(CMSampleBufferRef)sampleBuffer {
+    CALayer *preview = self.previewLayer;
+    if (!preview) return;
+    if (self.displayLayer.superlayer != preview) {
+        [preview addSublayer:self.displayLayer];
+    }
+    self.displayLayer.frame = preview.bounds;
+    if (self.displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+        [self.displayLayer flush];
+    }
+    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, YES);
+    if (attachments && CFArrayGetCount(attachments) > 0) {
+        CFMutableDictionaryRef attachment = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+        CFDictionarySetValue(attachment, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
+    }
+    [self.displayLayer enqueueSampleBuffer:sampleBuffer];
+}
+@end
 
 // MARK: - Frame pump
 
@@ -44,6 +88,7 @@ static os_log_t fauxSessionLog(void) {
 @property (nonatomic, strong) id captureConnection;
 - (void)start;
 - (void)stop;
+- (void)registerPreviewLayer:(CALayer *)previewLayer;
 @end
 
 @implementation FauxFramePump {
@@ -55,15 +100,23 @@ static os_log_t fauxSessionLog(void) {
     uint32_t _sequence;
     faux_frame_client *_frameClient;
     BOOL _usesHostSocket;
+    NSMutableArray<FauxPreviewTarget *> *_previewTargets;
+}
+
+- (void)registerPreviewLayer:(CALayer *)previewLayer {
+    if (!previewLayer) return;
+    @synchronized(self) {
+        if (!_previewTargets) _previewTargets = [NSMutableArray array];
+        for (FauxPreviewTarget *target in _previewTargets) {
+            if (target.previewLayer == previewLayer) return;
+        }
+        [_previewTargets addObject:[[FauxPreviewTarget alloc] initWithPreviewLayer:previewLayer]];
+        os_log(fauxSessionLog(), "preview layer registered total=%lu", (unsigned long)_previewTargets.count);
+    }
 }
 
 - (void)start {
     if (_timer) return;
-    id delegate = self.sampleBufferDelegate;
-    if (!delegate || !self.deliveryQueue) {
-        os_log_error(fauxSessionLog(), "frame pump missing delegate or queue");
-        return;
-    }
     if (_sourcePixels) { free(_sourcePixels); _sourcePixels = NULL; }
     if (_frameClient) { faux_frame_client_destroy(_frameClient); _frameClient = NULL; }
     _usesHostSocket = NO;
@@ -166,17 +219,34 @@ static os_log_t fauxSessionLog(void) {
 }
 
 - (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    _sequence++;
     id delegate = self.sampleBufferDelegate;
     dispatch_queue_t queue = self.deliveryQueue;
-    if (!delegate || !queue) return;
-    _sequence++;
-    id output = self.captureOutput;
-    id connection = self.captureConnection;
+    if (delegate && queue) {
+        id output = self.captureOutput;
+        id connection = self.captureConnection;
+        CFRetain(sampleBuffer);
+        dispatch_async(queue, ^{
+            ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
+                delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
+                output, sampleBuffer, connection);
+            CFRelease(sampleBuffer);
+        });
+    }
+    [self deliverToPreviewLayers:sampleBuffer];
+}
+
+- (void)deliverToPreviewLayers:(CMSampleBufferRef)sampleBuffer {
+    NSArray<FauxPreviewTarget *> *targets;
+    @synchronized(self) {
+        if (_previewTargets.count == 0) return;
+        targets = [_previewTargets copy];
+    }
     CFRetain(sampleBuffer);
-    dispatch_async(queue, ^{
-        ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
-            delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
-            output, sampleBuffer, connection);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (FauxPreviewTarget *target in targets) {
+            [target enqueue:sampleBuffer];
+        }
         CFRelease(sampleBuffer);
     });
 }
@@ -268,7 +338,27 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
 static void fauxSessionStartRunning(id self, SEL _cmd) {
     os_log(fauxSessionLog(), "startRunning intercepted (faux graph)");
     FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
-    if (pump) [pump start];
+    if (!pump) return;
+    NSHashTable *previewLayers = objc_getAssociatedObject(self, kSessionPreviewLayersKey);
+    for (CALayer *previewLayer in previewLayers) {
+        [pump registerPreviewLayer:previewLayer];
+    }
+    [pump start];
+}
+
+static void fauxPreviewSetSession(id self, SEL _cmd, id session) {
+    if (fauxOriginalPreviewSetSession) {
+        ((void (*)(id, SEL, id))fauxOriginalPreviewSetSession)(self, _cmd, session);
+    }
+    if (!session) return;
+    NSHashTable *previewLayers = objc_getAssociatedObject(session, kSessionPreviewLayersKey);
+    if (!previewLayers) {
+        previewLayers = [NSHashTable weakObjectsHashTable];
+        objc_setAssociatedObject(session, kSessionPreviewLayersKey, previewLayers, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [previewLayers addObject:self];
+    FauxFramePump *pump = objc_getAssociatedObject(session, kSessionPumpKey);
+    if (pump) [pump registerPreviewLayer:self];
 }
 
 static void fauxSessionStopRunning(id self, SEL _cmd) {
@@ -313,6 +403,10 @@ void FauxInstallCaptureSession(void) {
             fauxReplaceInstanceMethod(sessionClass, @selector(stopRunning), (IMP)fauxSessionStopRunning, "v@:");
             fauxReplaceInstanceMethod(sessionClass, @selector(canAddInput:), (IMP)fauxSessionCanAddInput, "B@:@");
             fauxReplaceInstanceMethod(sessionClass, @selector(canAddOutput:), (IMP)fauxSessionCanAddOutput, "B@:@");
+        }
+        Class previewClass = objc_getClass("AVCaptureVideoPreviewLayer");
+        if (previewClass) {
+            fauxOriginalPreviewSetSession = fauxReplaceInstanceMethod(previewClass, @selector(setSession:), (IMP)fauxPreviewSetSession, "v@:@");
         }
         os_log(fauxSessionLog(), "capture session interception installed");
     });

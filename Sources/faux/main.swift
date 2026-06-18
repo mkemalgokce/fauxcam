@@ -44,6 +44,8 @@ private func waitForInterrupt() {
     interrupted.wait()
 }
 
+setvbuf(stdout, nil, _IOLBF, 0)
+
 let command = FauxCommand(
     doctor: DoctorService(inspector: MachOToolInspector()),
     serverFactory: { socketPath, sourceSpec in
