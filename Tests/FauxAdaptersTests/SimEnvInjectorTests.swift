@@ -45,3 +45,12 @@ private final class CallLog: @unchecked Sendable {
     let injector = SimEnvInjector(dylibPath: "/x", runSimctl: { _ in 1 })
     #expect(injector.install(onDevices: ["U1"]) == false)
 }
+
+@Test func injectorUpdatesFrameSizeWithoutDyld() {
+    let log = CallLog()
+    let injector = SimEnvInjector(dylibPath: "/x", runSimctl: { log.record($0); return 0 })
+    injector.setFrameSize(onDevices: ["U1"], width: 330, height: 720, fps: 30)
+    #expect(log.calls.contains(["spawn", "U1", "launchctl", "setenv", "FAUXCAM_WIDTH", "330"]))
+    #expect(log.calls.contains(["spawn", "U1", "launchctl", "setenv", "FAUXCAM_HEIGHT", "720"]))
+    #expect(!log.calls.contains { $0.contains("DYLD_INSERT_LIBRARIES") })  // no re-injection
+}

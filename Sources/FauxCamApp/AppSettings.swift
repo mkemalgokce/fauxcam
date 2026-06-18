@@ -5,8 +5,6 @@ import ServiceManagement
 /// first-run onboarding has been shown.
 @MainActor
 final class AppSettings: ObservableObject {
-    @Published var autoWidth: Int { didSet { defaults.set(autoWidth, forKey: Keys.width) } }
-    @Published var autoHeight: Int { didSet { defaults.set(autoHeight, forKey: Keys.height) } }
     @Published var autoFps: Int { didSet { defaults.set(autoFps, forKey: Keys.fps) } }
     @Published var autoEnableOnLaunch: Bool { didSet { defaults.set(autoEnableOnLaunch, forKey: Keys.autoEnable) } }
     @Published var hasOnboarded: Bool { didSet { defaults.set(hasOnboarded, forKey: Keys.onboarded) } }
@@ -24,14 +22,11 @@ final class AppSettings: ObservableObject {
 
     private let defaults: UserDefaults
     private enum Keys {
-        static let width = "fauxAutoWidth", height = "fauxAutoHeight", fps = "fauxAutoFps"
-        static let onboarded = "fauxOnboarded", autoEnable = "fauxAutoEnableOnLaunch"
+        static let fps = "fauxAutoFps", onboarded = "fauxOnboarded", autoEnable = "fauxAutoEnableOnLaunch"
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        autoWidth = defaults.object(forKey: Keys.width) as? Int ?? 1280
-        autoHeight = defaults.object(forKey: Keys.height) as? Int ?? 720
         autoFps = defaults.object(forKey: Keys.fps) as? Int ?? 30
         autoEnableOnLaunch = defaults.bool(forKey: Keys.autoEnable)
         hasOnboarded = defaults.bool(forKey: Keys.onboarded)

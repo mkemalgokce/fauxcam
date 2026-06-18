@@ -14,6 +14,10 @@ struct SettingsView: View {
             support.tabItem { Label("Support", systemImage: "heart") }
         }
         .frame(width: 480, height: 400)
+        .onChange(of: didReset) { _, reset in
+            guard reset else { return }
+            Task { try? await Task.sleep(for: .seconds(3)); didReset = false }
+        }
     }
 
     // MARK: General
@@ -21,10 +25,11 @@ struct SettingsView: View {
     private var general: some View {
         Form {
             Section {
+                Toggle("Auto-inject into simulators", isOn: autoInjectBinding)
+                Toggle("Turn on automatically at launch", isOn: $settings.autoEnableOnLaunch)
                 Toggle("Launch FauxCam at login", isOn: $settings.launchAtLogin)
-                Toggle("Turn on auto-inject at launch", isOn: $settings.autoEnableOnLaunch)
             } footer: {
-                Text("Auto-inject loads the fake camera into every app in your booted simulators.")
+                Text("Auto-inject loads the fake camera into every app you open in your booted simulators — tapped open or run from Xcode.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Status") {
@@ -38,18 +43,32 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var autoInjectBinding: Binding<Bool> {
+        Binding(
+            get: { autoMode.isActive },
+            set: { on in
+                settings.autoEnableOnLaunch = on
+                if on {
+                    autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
+                                    deviceUDIDs: controller.devices.map(\.udid),
+                                    width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
+                } else {
+                    autoMode.disable()
+                }
+            }
+        )
+    }
+
     // MARK: Customization
 
     private var customization: some View {
         Form {
             Section {
-                Stepper("Width: \(settings.autoWidth)", value: $settings.autoWidth, in: 160...3840, step: 16)
-                Stepper("Height: \(settings.autoHeight)", value: $settings.autoHeight, in: 120...2160, step: 16)
                 Stepper("Frames per second: \(settings.autoFps)", value: $settings.autoFps, in: 5...60, step: 5)
             } header: {
-                Text("Camera resolution")
+                Text("Camera")
             } footer: {
-                Text("The size the fake camera advertises to apps. Applied the next time auto-inject is turned on.")
+                Text("The resolution automatically matches the selected simulator's screen, so the preview and the device stay in sync.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -163,8 +182,21 @@ struct OnboardingView: View {
                 bullet("slider.horizontal.3", "Pick the simulator to preview, choose your source, and frame it with zoom + drag.")
                 bullet("checkmark.shield", "Nothing lingers: all injection is removed when you turn it off or quit FauxCam.")
             }
-            Button("Get Started") { settings.hasOnboarded = true }
+            VStack(spacing: 6) {
+                Button("Enable Auto-inject & Continue") {
+                    settings.autoEnableOnLaunch = true
+                    settings.hasOnboarded = true
+                }
                 .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Not now") {
+                    settings.autoEnableOnLaunch = false
+                    settings.hasOnboarded = true
+                }
+                .buttonStyle(.borderless).controlSize(.small)
+            }
+            Text("Sets a launchd variable in your booted simulators — no files on your Mac, removed when you quit or turn it off. You can change this any time in Settings.")
+                .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(24)
         .frame(width: 360)

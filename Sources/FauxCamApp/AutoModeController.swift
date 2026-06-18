@@ -98,4 +98,12 @@ final class AutoModeController: ObservableObject {
 
     func setSourceDescriptor(_ descriptor: SourceDescriptor) { server?.setSourceDescriptor(descriptor) }
     func setCrop(_ crop: CropRegion) { server?.setCrop(crop) }
+
+    /// Re-advertises a new frame size on the injected sims (e.g. when the selected simulator changes,
+    /// so apps opened afterwards match the preview's aspect). Already-running apps relaunch to pick it up.
+    func setFrameSize(width: Int, height: Int, fps: Int) {
+        guard isActive else { return }
+        autoFrame = (width, height, fps)
+        injector.setFrameSize(onDevices: Array(injectedUDIDs), width: width, height: height, fps: fps)
+    }
 }

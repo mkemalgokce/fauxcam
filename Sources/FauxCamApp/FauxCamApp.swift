@@ -79,7 +79,6 @@ struct RootView: View {
     @ObservedObject var autoMode: AutoModeController
     @ObservedObject var settings: AppSettings
     let onOpenSettings: () -> Void
-    @State private var confirmingAutoMode = false
     @State private var didCleanLeftover = false
     @State private var didAutoEnable = false
     @Environment(\.controlActiveState) private var controlActiveState
@@ -109,8 +108,7 @@ struct RootView: View {
             if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
             if settings.autoEnableOnLaunch, !didAutoEnable, !autoMode.isActive, !udids.isEmpty {
                 didAutoEnable = true
-                autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
-                                deviceUDIDs: udids, width: settings.autoWidth, height: settings.autoHeight, fps: settings.autoFps)
+                enableAutoInject()
             }
         }
     }
@@ -124,17 +122,11 @@ struct RootView: View {
             VStack(spacing: 12) {
                 simulatorSection
                 sourceSection
+                autoInjectBar
             }
             .padding(.horizontal, 16)
 
-            autoInjectBar
             footer
-        }
-        .alert("Enable auto-inject?", isPresented: $confirmingAutoMode) {
-            Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region, deviceUDIDs: controller.devices.map(\.udid), width: settings.autoWidth, height: settings.autoHeight, fps: settings.autoFps) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("FauxCam sets a launchd variable in your booted simulators so every app you launch — tapped open or run from Xcode — loads the fake camera. It touches no files on your Mac, is unset when you turn this off or quit FauxCam, and clears on simulator reboot. Relaunch already-running apps to apply.")
         }
         .onAppear {
             reconfigurePreview()
@@ -145,11 +137,24 @@ struct RootView: View {
         .onChange(of: controller.imagePath) { _, _ in sourceChanged() }
         .onChange(of: controller.videoPath) { _, _ in sourceChanged() }
         .onChange(of: controller.qrText) { _, _ in sourceChanged() }
-        .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.deviceAspect) { _, _ in deviceChanged() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
+        }
+    }
+
+    private func enableAutoInject() {
+        autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
+                        deviceUDIDs: controller.devices.map(\.udid),
+                        width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
+    }
+
+    private func deviceChanged() {
+        reconfigurePreview()
+        if autoMode.isActive {
+            autoMode.setFrameSize(width: controller.outputSize.width, height: controller.outputSize.height, fps: settings.autoFps)
         }
     }
 
@@ -170,38 +175,36 @@ struct RootView: View {
         autoMode.setSourceDescriptor(controller.sourceDescriptor)
     }
 
-    // MARK: Auto-inject (the primary action)
+    // MARK: Auto-inject status (on whenever the app runs; toggle here or in Settings)
 
     private var autoInjectBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                if autoMode.isActive {
-                    Circle().fill(.green).frame(width: 8, height: 8)
-                    Text("Auto-inject is on").font(.footnote.weight(.medium))
-                } else {
-                    Text(controller.devices.isEmpty ? "Boot a simulator to begin" : "Every app in your simulators gets the camera")
-                        .font(.footnote).foregroundStyle(.secondary)
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: autoMode.isActive ? "bolt.fill" : "bolt.slash")
+                        .foregroundStyle(autoMode.isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    Text(autoMode.isActive ? "Auto-inject on" : "Auto-inject off")
+                        .font(.footnote.weight(.medium))
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { autoMode.isActive },
+                        set: { on in
+                            settings.autoEnableOnLaunch = on
+                            on ? enableAutoInject() : autoMode.disable()
+                        }
+                    ))
+                    .labelsHidden().toggleStyle(.switch)
+                    .disabled(!autoMode.isActive && controller.devices.isEmpty)
                 }
-                Spacer()
-            }
-            if let error = autoMode.lastError {
-                HStack { Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2); Spacer() }
-            }
-            Button {
-                autoMode.isActive ? autoMode.disable() : (confirmingAutoMode = true)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: autoMode.isActive ? "bolt.slash.fill" : "bolt.fill")
-                    Text(autoMode.isActive ? "Turn Off Auto-inject" : "Start Auto-inject").fontWeight(.semibold)
+                Text(controller.devices.isEmpty
+                     ? "Boot a simulator — every app you open then gets the camera."
+                     : "Every app you open in your simulators gets the camera. Relaunch running apps to apply.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let error = autoMode.lastError {
+                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glass)
-            .controlSize(.large)
-            .tint(autoMode.isActive ? .secondary : .accentColor)
-            .disabled(!autoMode.isActive && controller.devices.isEmpty)
         }
-        .padding(.horizontal, 14)
     }
 
     private func reconfigurePreview() {

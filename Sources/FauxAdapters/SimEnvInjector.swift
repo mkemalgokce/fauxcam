@@ -43,6 +43,16 @@ public struct SimEnvInjector {
         return allOK
     }
 
+    /// Updates only the advertised frame size on already-injected sims (no DYLD change). Apps launched
+    /// afterwards advertise the new size; already-running apps keep theirs until relaunch.
+    public func setFrameSize(onDevices udids: [String], width: Int, height: Int, fps: Int) {
+        for udid in udids {
+            _ = runSimctl(["spawn", udid, "launchctl", "setenv", "FAUXCAM_WIDTH", String(width)])
+            _ = runSimctl(["spawn", udid, "launchctl", "setenv", "FAUXCAM_HEIGHT", String(height)])
+            _ = runSimctl(["spawn", udid, "launchctl", "setenv", "FAUXCAM_FPS", String(fps)])
+        }
+    }
+
     public func uninstall(fromDevices udids: [String]) {
         for udid in udids {
             for variable in [Self.injectedVariable] + Self.frameVariables {
