@@ -17,8 +17,20 @@ struct PixelBufferScaler {
         height: Int,
         presentationTimeNanoseconds: UInt64
     ) -> Frame? {
+        frame(from: CIImage(cvImageBuffer: imageBuffer), aspectFill: true,
+              position: position, width: width, height: height, presentationTimeNanoseconds: presentationTimeNanoseconds)
+    }
+
+    func frame(
+        from image: CIImage,
+        aspectFill: Bool,
+        position: CameraPosition,
+        width: Int,
+        height: Int,
+        presentationTimeNanoseconds: UInt64
+    ) -> Frame? {
         guard width > 0, height > 0 else { return nil }
-        let filled = aspectFilled(CIImage(cvImageBuffer: imageBuffer), toWidth: width, height: height)
+        let filled = aspectFill ? aspectFilled(image, toWidth: width, height: height) : image
 
         var destination: CVPixelBuffer?
         let attributes: [CFString: Any] = [

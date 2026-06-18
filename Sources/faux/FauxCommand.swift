@@ -136,8 +136,10 @@ struct FauxCommand {
         usage: faux <command>
           doctor [path-to-dylib]
           list
-          serve [socket-path] [--source image|video:<path>|webcam]
-          run [--device <udid>] [--source image|video:<path>|webcam] <bundle-id>
+          serve [socket-path] [--source <source>]
+          run [--device <udid>] [--source <source>] <bundle-id>
+
+        <source>: image | video:<path> | webcam | qr:<text>
         """)
         return ExitCode.usageError
     }

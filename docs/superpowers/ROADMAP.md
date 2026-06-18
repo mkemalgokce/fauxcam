@@ -21,8 +21,8 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 | 1 | Fake discovery | AVSwizzle vends fake front/back `AVCaptureDevice`; `AVCaptureDeviceDiscoverySession`/`default`/`devices` return them; authorization → Authorized. No frames. | ✅ DONE (merged b5671ae; 16 tests, live discovery proven) |
 | 2 | Static frame E2E | `faux_wire.h` framing + `UnixSocketTransport` + `FrameServer` (host) + `FrameClient` + `BufferFactory` (guest): a `CMSampleBuffer` from a host-pushed BGRA image reaches `captureOutput:didOutputSampleBuffer:`. | ✅ DONE (merged ba637a9; host→socket→guest→delegate proven, 27 tests, review fixed) |
 | 3 | Multi-source | host `VideoFileSource` (AVAssetReader, video file → BGRA frames) + `WebcamSource` (AVCaptureSession Mac camera/Continuity) as new `FrameSource`s; `faux serve --source`. Guest unchanged. | ✅ DONE (merged c01f5ad; video e2e proven in sim, 37 tests, review fixed) |
-| 4 | Host UX | `SimWatcher` (CoreSimulator/`simctl` booted-device discovery) + SwiftUI menubar app + `faux` CLI (`run`/`list`/`doctor`): list booted sims, pick a source, auto inject+serve. | ▶ IN PROGRESS |
-| 5 | QR + polish | host `CoreImageQRSource` + guest `AVCaptureMetadataOutput` hook; docs, notarization, README. | ⬜ TODO |
+| 4 | Host UX | `SimWatcher` (CoreSimulator/`simctl` booted-device discovery) + SwiftUI menubar app + `faux` CLI (`run`/`list`/`doctor`): list booted sims, pick a source, auto inject+serve. | ✅ DONE (merged a95e3aa; faux run e2e + Tier-A clean, 55 tests, review fixed) |
+| 5 | QR + polish | host `QRCodeSource` (CoreImage, `--source qr:<text>`) + README + `sign-app.sh`. Guest metadata hook = documented future work. | ▶ IN PROGRESS |
 | 6 | Fig layer | `FigCaptureSession` hooks for low-level capture clients (RN/Flutter/WebRTC). | ⬜ TODO |
 
 ## Control notes

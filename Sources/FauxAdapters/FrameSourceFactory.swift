@@ -5,12 +5,16 @@ import FauxDomain
 public struct FrameSourceFactory {
     public static let webcamToken = "webcam"
     public static let videoPrefix = "video:"
+    public static let qrPrefix = "qr:"
     private static let defaultColor = (blue: UInt8(0), green: UInt8(160), red: UInt8(80), alpha: UInt8(255))
     private static let log = Logger(subsystem: "com.fauxcam", category: "compose")
 
     public init() {}
 
     public func make(_ spec: String) -> FrameSource {
+        if spec.hasPrefix(Self.qrPrefix) {
+            return QRCodeSource(text: String(spec.dropFirst(Self.qrPrefix.count)))
+        }
         if spec == Self.webcamToken {
             if let webcam = WebcamSource() { return webcam }
             Self.log.error("no camera available; falling back to image source")
