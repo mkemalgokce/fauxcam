@@ -1,4 +1,5 @@
 #include "AVSwizzle.h"
+#include "FauxConfig.h"
 
 @import Foundation;
 @import ObjectiveC.runtime;
@@ -15,8 +16,6 @@ static const NSInteger kFauxPositionBack = AVCaptureDevicePositionBack;
 static const NSInteger kFauxPositionFront = AVCaptureDevicePositionFront;
 static const NSInteger kFauxAuthorizationAuthorized = AVAuthorizationStatusAuthorized;
 
-static const int32_t kFauxFormatWidth = 1920;
-static const int32_t kFauxFormatHeight = 1080;
 
 static id fauxBackDevice;
 static id fauxFrontDevice;
@@ -70,7 +69,7 @@ static CMVideoFormatDescriptionRef fauxSharedFormatDescription(void) {
     dispatch_once(&once, ^{
         OSStatus status = CMVideoFormatDescriptionCreate(kCFAllocatorDefault,
                                                          kCMVideoCodecType_422YpCbCr8,
-                                                         kFauxFormatWidth, kFauxFormatHeight, NULL, &formatDescription);
+                                                         faux_config_width(), faux_config_height(), NULL, &formatDescription);
         if (status != noErr) {
             os_log_error(fauxLog(), "format description create failed status=%d", (int)status);
             formatDescription = NULL;
@@ -81,7 +80,9 @@ static CMVideoFormatDescriptionRef fauxSharedFormatDescription(void) {
 
 static CMVideoFormatDescriptionRef fauxFormatDescription(id self, SEL _cmd) { return fauxSharedFormatDescription(); }
 static NSString *fauxFormatMediaType(id self, SEL _cmd) { return kVideoMediaTypeCode; }
-static NSString *fauxFormatDescriptionText(id self, SEL _cmd) { return @"<FauxCaptureDeviceFormat 1920x1080>"; }
+static NSString *fauxFormatDescriptionText(id self, SEL _cmd) {
+    return [NSString stringWithFormat:@"<FauxCaptureDeviceFormat %dx%d>", faux_config_width(), faux_config_height()];
+}
 
 static id fauxSharedFormat(void) {
     static id format;

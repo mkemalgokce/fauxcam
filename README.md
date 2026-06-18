@@ -43,6 +43,19 @@ swift run faux run --device <udid> com.example.MyApp --source image
 
 Lower-level: `faux serve [socket] [--source <source>]` runs only the frame server (you launch the app yourself with `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` + `SIMCTL_CHILD_FAUXCAM_SOCKET`).
 
+## Resolution & frame rate
+
+The fake camera defaults to **1280×720 at 30 fps**. Override per launch with environment
+variables (the advertised device format and the delivered frames always match):
+
+```sh
+SIMCTL_CHILD_FAUXCAM_WIDTH=1920 SIMCTL_CHILD_FAUXCAM_HEIGHT=1080 SIMCTL_CHILD_FAUXCAM_FPS=30 \
+  swift run faux run com.example.App --source video:/clip.mov
+```
+
+`FAUXCAM_WIDTH`/`FAUXCAM_HEIGHT` are clamped to 16…8192, `FAUXCAM_FPS` to 1…120. Host sources
+are scaled (aspect-fill) to the configured size.
+
 ## Supported apps
 
 The target app must open the camera through **AVFoundation**. Both common paths work:

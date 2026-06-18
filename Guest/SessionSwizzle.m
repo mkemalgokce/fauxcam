@@ -1,6 +1,7 @@
 #include "SessionSwizzle.h"
 #include "AVSwizzle.h"
 #include "FrameClient.h"
+#include "FauxConfig.h"
 #import "FauxBufferFactory.h"
 
 @import Foundation;
@@ -11,9 +12,6 @@
 @import CoreMedia;
 @import QuartzCore;
 
-static const int32_t kFrameWidth = 1280;
-static const int32_t kFrameHeight = 720;
-static const int32_t kFramesPerSecond = 10;
 static const uint8_t kSourcePixelBlue = 255;
 static const uint8_t kSourcePixelGreen = 0;
 static const uint8_t kSourcePixelRed = 255;
@@ -105,6 +103,9 @@ static os_log_t fauxSessionLog(void) {
     BOOL _usesHostSocket;
     BOOL _startRequested;
     BOOL _loggedPreviewDelivery;
+    int32_t _frameWidth;
+    int32_t _frameHeight;
+    int32_t _framesPerSecond;
     NSMutableArray<FauxPreviewTarget *> *_previewTargets;
 }
 
@@ -137,8 +138,11 @@ static os_log_t fauxSessionLog(void) {
     if (_sourcePixels) { free(_sourcePixels); _sourcePixels = NULL; }
     if (_frameClient) { faux_frame_client_destroy(_frameClient); _frameClient = NULL; }
     _usesHostSocket = NO;
+    _frameWidth = faux_config_width();
+    _frameHeight = faux_config_height();
+    _framesPerSecond = faux_config_fps();
 
-    _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:kFrameWidth height:kFrameHeight framesPerSecond:kFramesPerSecond];
+    _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:_frameWidth height:_frameHeight framesPerSecond:_framesPerSecond];
     if (!_bufferFactory) return;
     [self buildSourcePixels];
     [self connectHostSocket];
@@ -147,12 +151,12 @@ static os_log_t fauxSessionLog(void) {
         _pumpQueue = dispatch_queue_create("com.fauxcam.pump", DISPATCH_QUEUE_SERIAL);
     }
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _pumpQueue);
-    uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)kFramesPerSecond;
+    uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)_framesPerSecond;
     dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), interval, interval / 10);
     __weak FauxFramePump *weakSelf = self;
     dispatch_source_set_event_handler(_timer, ^{ [weakSelf deliverFrame]; });
     dispatch_resume(_timer);
-    os_log(fauxSessionLog(), "frame pump started fps=%d", kFramesPerSecond);
+    os_log(fauxSessionLog(), "frame pump started %dx%d fps=%d", _frameWidth, _frameHeight, _framesPerSecond);
 }
 
 - (void)stop {
@@ -176,8 +180,8 @@ static os_log_t fauxSessionLog(void) {
 }
 
 - (void)buildSourcePixels {
-    _sourceBytesPerRow = (size_t)kFrameWidth * 4;
-    size_t total = _sourceBytesPerRow * (size_t)kFrameHeight;
+    _sourceBytesPerRow = (size_t)_frameWidth * 4;
+    size_t total = _sourceBytesPerRow * (size_t)_frameHeight;
     _sourcePixels = malloc(total);
     if (!_sourcePixels) return;
     for (size_t offset = 0; offset < total; offset += 4) {
@@ -215,7 +219,7 @@ static os_log_t fauxSessionLog(void) {
 }
 
 - (void)deliverHostFrame {
-    if (faux_frame_client_send_demand(_frameClient, FAUX_POSITION_BACK, (uint32_t)kFrameWidth, (uint32_t)kFrameHeight, (uint32_t)kFramesPerSecond, FAUX_PIXEL_FORMAT_BGRA32) != 0) {
+    if (faux_frame_client_send_demand(_frameClient, FAUX_POSITION_BACK, (uint32_t)_frameWidth, (uint32_t)_frameHeight, (uint32_t)_framesPerSecond, FAUX_PIXEL_FORMAT_BGRA32) != 0) {
         [self handleHostSocketFailure];
         return;
     }
@@ -241,7 +245,7 @@ static os_log_t fauxSessionLog(void) {
     if (!_sourcePixels) return;
     CMSampleBufferRef sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:_sourcePixels
                                                                sourceBytesPerRow:_sourceBytesPerRow
-                                                                    sourceLength:_sourceBytesPerRow * (size_t)kFrameHeight];
+                                                                    sourceLength:_sourceBytesPerRow * (size_t)_frameHeight];
     if (sampleBuffer) {
         [self deliverSampleBuffer:sampleBuffer];
         CFRelease(sampleBuffer);
