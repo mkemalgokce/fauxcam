@@ -8,20 +8,30 @@ import FauxDomain
 final class WebcamFrameProducer: @unchecked Sendable {
     private let scaler = PixelBufferScaler()
     private let clock: @Sendable () -> UInt64
+    private let crop: @Sendable () -> CropRegion
     private let store = LatestPixelBufferStore()
 
-    init(clock: @escaping @Sendable () -> UInt64) {
+    init(clock: @escaping @Sendable () -> UInt64, crop: @escaping @Sendable () -> CropRegion = { .identity }) {
         self.clock = clock
+        self.crop = crop
     }
 
     func ingest(_ imageBuffer: CVImageBuffer) {
         store.replace(with: detachedPixelBufferCopy(of: imageBuffer))
     }
 
+    /// The live camera frame's width/height ratio, so the preview shows it at its natural shape.
+    var naturalAspect: Double {
+        guard let buffer = store.latest() else { return 16.0 / 9.0 }
+        let height = CVPixelBufferGetHeight(buffer)
+        return height > 0 ? Double(CVPixelBufferGetWidth(buffer)) / Double(height) : 16.0 / 9.0
+    }
+
     func frame(satisfying demand: Demand) -> Frame {
         guard let imageBuffer = store.latest(),
               let frame = scaler.frame(
                   from: imageBuffer,
+                  region: crop(),
                   position: demand.position,
                   width: demand.requestedWidth,
                   height: demand.requestedHeight,
@@ -98,8 +108,9 @@ public final class WebcamSource: NSObject, FrameSource, AVCaptureVideoDataOutput
     private let videoOutput = AVCaptureVideoDataOutput()
     private let deliveryQueue = DispatchQueue(label: "com.fauxcam.webcam")
 
-    public init?(clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
-        self.producer = WebcamFrameProducer(clock: clock)
+    public init?(clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+                 crop: @escaping @Sendable () -> CropRegion = { .identity }) {
+        self.producer = WebcamFrameProducer(clock: clock, crop: crop)
         super.init()
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
@@ -114,6 +125,8 @@ public final class WebcamSource: NSObject, FrameSource, AVCaptureVideoDataOutput
     }
 
     deinit { session.stopRunning() }
+
+    public var naturalAspect: Double { producer.naturalAspect }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
         producer.frame(satisfying: demand)

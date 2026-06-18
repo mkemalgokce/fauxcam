@@ -38,12 +38,16 @@ final class PreviewStreamer: ObservableObject {
         }
     }
 
-    /// Rebuilds the source (e.g. after camera permission is granted so the webcam source can open)
-    /// and sizes the preview demand to the source's NATURAL aspect, so the preview shows it undistorted.
+    /// Rebuilds the source (e.g. after camera permission is granted so the webcam source can open).
     func rebuild() {
         guard let descriptor else { return }
-        let source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
-        self.source = source
+        source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
+        image = nil
+    }
+
+    /// Sizes the preview demand to the source's NATURAL aspect, so the preview shows it undistorted.
+    /// Re-read each tick because a camera's aspect is only known once its first frame arrives.
+    private func updateDemand(for source: FrameSource) {
         let longSide = 480.0
         let aspect = source.naturalAspect > 0 ? source.naturalAspect : 16.0 / 9.0
         if aspect >= 1 {
@@ -51,7 +55,6 @@ final class PreviewStreamer: ObservableObject {
         } else {
             demandHeight = even(longSide); demandWidth = even(longSide * aspect)
         }
-        image = nil
     }
 
     func start() {
@@ -73,6 +76,7 @@ final class PreviewStreamer: ObservableObject {
 
     private func tick() {
         guard let source, !pulling else { return }
+        updateDemand(for: source)
         pulling = true
         let width = demandWidth, height = demandHeight
         Task.detached(priority: .userInitiated) {

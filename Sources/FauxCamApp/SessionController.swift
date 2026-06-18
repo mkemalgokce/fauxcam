@@ -36,7 +36,7 @@ final class SessionController: ObservableObject {
             }
         }
         var needsDetail: Bool { self == .video || self == .qr }
-        var supportsFraming: Bool { self != .webcam }
+        var supportsFraming: Bool { true }
         var detailPrompt: String { self == .video ? "/path/to/clip.mov" : "Text to encode" }
         var footerHint: String {
             switch self {

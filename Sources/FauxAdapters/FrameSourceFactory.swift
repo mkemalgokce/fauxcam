@@ -12,7 +12,7 @@ public struct FrameSourceFactory {
         case .qr(let text):
             return QRCodeSource(text: text, crop: crop)
         case .webcam:
-            if let webcam = WebcamSource() { return webcam }
+            if let webcam = WebcamSource(crop: crop) { return webcam }
             Self.log.error("no camera available; falling back to test image")
             return testImage(crop: crop)
         case .video(let url):
