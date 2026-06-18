@@ -21,17 +21,19 @@ public struct SimctlScreenshotAspectProvider: DeviceScreenAspectProviding {
     }
 
     public static func captureViaXcrun(_ udid: String) -> Data? {
+        // `simctl io screenshot -` (stdout) yields zero bytes here; writing to a file works.
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("fauxcam-shot-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "io", udid, "screenshot", "--type=png", "-"]
-        let output = Pipe()
-        process.standardOutput = output
+        process.arguments = ["simctl", "io", udid, "screenshot", "--type=png", fileURL.path]
+        process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
-        return data
+        return try? Data(contentsOf: fileURL)
     }
 }
 

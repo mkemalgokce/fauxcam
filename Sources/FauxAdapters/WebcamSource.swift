@@ -20,13 +20,6 @@ final class WebcamFrameProducer: @unchecked Sendable {
         store.replace(with: detachedPixelBufferCopy(of: imageBuffer))
     }
 
-    /// The live camera frame's width/height ratio, so the preview shows it at its natural shape.
-    var naturalAspect: Double {
-        guard let buffer = store.latest() else { return 16.0 / 9.0 }
-        let height = CVPixelBufferGetHeight(buffer)
-        return height > 0 ? Double(CVPixelBufferGetWidth(buffer)) / Double(height) : 16.0 / 9.0
-    }
-
     func frame(satisfying demand: Demand) -> Frame {
         guard let imageBuffer = store.latest(),
               let frame = scaler.frame(
@@ -125,8 +118,6 @@ public final class WebcamSource: NSObject, FrameSource, AVCaptureVideoDataOutput
     }
 
     deinit { session.stopRunning() }
-
-    public var naturalAspect: Double { producer.naturalAspect }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
         producer.frame(satisfying: demand)

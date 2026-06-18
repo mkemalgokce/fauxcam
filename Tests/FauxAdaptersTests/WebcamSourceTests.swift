@@ -28,13 +28,6 @@ import FauxDomain
     #expect(frame.pixels[center] > 100)  // center keeps the camera color
 }
 
-@Test func webcamProducerReportsNaturalAspectFromBuffer() {
-    let producer = WebcamFrameProducer(clock: { 1 })
-    #expect(abs(producer.naturalAspect - 16.0 / 9.0) < 0.01)  // default before first frame
-    producer.ingest(TestPixelBuffers.solidBGRA(width: 64, height: 32, blue: 0, green: 0, red: 0))
-    #expect(abs(producer.naturalAspect - 2.0) < 0.01)  // 64/32 once a frame arrives
-}
-
 @Test func webcamProducerScalesIngestedBufferToTheDemand() throws {
     let producer = WebcamFrameProducer(clock: { 7 })
     producer.ingest(TestPixelBuffers.solidBGRA(width: 32, height: 24, blue: 200, green: 30, red: 90))

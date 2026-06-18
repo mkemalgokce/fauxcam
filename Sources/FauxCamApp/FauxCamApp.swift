@@ -102,7 +102,7 @@ struct RootView: View {
 
     private func reconfigurePreview() {
         preview.setCrop(controller.region)
-        preview.configure(descriptor: controller.sourceDescriptor)
+        preview.configure(descriptor: controller.sourceDescriptor, aspect: controller.outputAspect)
     }
 
     // MARK: Destination

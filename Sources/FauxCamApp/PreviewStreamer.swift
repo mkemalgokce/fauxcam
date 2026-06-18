@@ -31,7 +31,17 @@ final class PreviewStreamer: ObservableObject {
 
     func setCrop(_ region: CropRegion) { cropHolder.value = region }
 
-    func configure(descriptor: SourceDescriptor) {
+    /// `aspect` is the SELECTED DEVICE's screen aspect: the preview is rendered exactly as the
+    /// simulator will receive it (source fit into the device frame, black bars, zoom filling the
+    /// device height), so the in-app preview and the device PiP match the real simulator.
+    func configure(descriptor: SourceDescriptor, aspect: Double) {
+        let longSide = 480.0
+        let safeAspect = aspect > 0 ? aspect : 9.0 / 19.5
+        if safeAspect >= 1 {
+            demandWidth = even(longSide); demandHeight = even(longSide / safeAspect)
+        } else {
+            demandHeight = even(longSide); demandWidth = even(longSide * safeAspect)
+        }
         if descriptor != self.descriptor || source == nil {
             self.descriptor = descriptor
             rebuild()
@@ -43,18 +53,6 @@ final class PreviewStreamer: ObservableObject {
         guard let descriptor else { return }
         source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
         image = nil
-    }
-
-    /// Sizes the preview demand to the source's NATURAL aspect, so the preview shows it undistorted.
-    /// Re-read each tick because a camera's aspect is only known once its first frame arrives.
-    private func updateDemand(for source: FrameSource) {
-        let longSide = 480.0
-        let aspect = source.naturalAspect > 0 ? source.naturalAspect : 16.0 / 9.0
-        if aspect >= 1 {
-            demandWidth = even(longSide); demandHeight = even(longSide / aspect)
-        } else {
-            demandHeight = even(longSide); demandWidth = even(longSide * aspect)
-        }
     }
 
     func start() {
@@ -76,7 +74,6 @@ final class PreviewStreamer: ObservableObject {
 
     private func tick() {
         guard let source, !pulling else { return }
-        updateDemand(for: source)
         pulling = true
         let width = demandWidth, height = demandHeight
         Task.detached(priority: .userInitiated) {
