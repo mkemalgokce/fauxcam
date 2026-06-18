@@ -27,8 +27,11 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     private var hasLoggedFailure = false
     private var permanentlyFailed = false
 
-    public init(url: URL, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    private let crop: @Sendable () -> CropSpec
+
+    public init(url: URL, crop: @escaping @Sendable () -> CropSpec = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.url = url
+        self.crop = crop
         self.clock = clock
     }
 
@@ -39,6 +42,7 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
             guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
                   let frame = scaler.frame(
                       from: imageBuffer,
+                      crop: crop(),
                       position: demand.position,
                       width: demand.requestedWidth,
                       height: demand.requestedHeight,

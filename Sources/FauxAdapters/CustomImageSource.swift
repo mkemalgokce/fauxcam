@@ -11,10 +11,11 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
     private let sourceImage: CIImage
     private let scaler = PixelBufferScaler()
     private let clock: @Sendable () -> UInt64
+    private let crop: @Sendable () -> CropSpec
     private let cacheLock = NSLock()
-    private var cached: (width: Int, height: Int, position: CameraPosition, bytesPerRow: Int, pixels: [UInt8])?
+    private var cached: (width: Int, height: Int, position: CameraPosition, crop: CropSpec, bytesPerRow: Int, pixels: [UInt8])?
 
-    public init?(contentsOf url: URL, maxPixelSize: Int = 1920, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    public init?(contentsOf url: URL, maxPixelSize: Int = 1920, crop: @escaping @Sendable () -> CropSpec = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -23,21 +24,25 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return nil }
         self.sourceImage = CIImage(cgImage: cgImage)
+        self.crop = crop
         self.clock = clock
     }
 
-    public init(ciImage: CIImage, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    public init(ciImage: CIImage, crop: @escaping @Sendable () -> CropSpec = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.sourceImage = ciImage
+        self.crop = crop
         self.clock = clock
     }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
+        let crop = self.crop()
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached,
            cached.width == demand.requestedWidth,
            cached.height == demand.requestedHeight,
-           cached.position == demand.position {
+           cached.position == demand.position,
+           cached.crop == crop {
             return Frame(
                 position: cached.position, pixelFormat: .bgra32,
                 width: cached.width, height: cached.height, bytesPerRow: cached.bytesPerRow,
@@ -45,11 +50,11 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
             )
         }
         guard let frame = scaler.frame(
-            from: sourceImage, aspectFill: true,
+            from: sourceImage, crop: crop,
             position: demand.position, width: demand.requestedWidth, height: demand.requestedHeight,
             presentationTimeNanoseconds: clock()
         ) else { return blackFrame(for: demand, clock: clock) }
-        cached = (frame.width, frame.height, frame.position, frame.bytesPerRow, frame.pixels)
+        cached = (frame.width, frame.height, frame.position, crop, frame.bytesPerRow, frame.pixels)
         return frame
     }
 

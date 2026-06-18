@@ -104,7 +104,7 @@ struct RootView: View {
                             Text(device.name).tag(String?.some(device.udid))
                         }
                     }
-                    .labelsHidden().fixedSize()
+                    .labelsHidden().frame(width: 164)
                     .disabled(controller.devices.isEmpty)
                     Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless)
@@ -118,7 +118,7 @@ struct RootView: View {
                         ForEach(controller.installedApps) { app in
                             Button { controller.bundleIdentifier = app.bundleIdentifier } label: {
                                 if let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
-                                    Image(nsImage: icon)
+                                    Image(nsImage: icon).resizable().frame(width: 16, height: 16)
                                 }
                                 Text(app.displayName)
                             }
@@ -126,7 +126,8 @@ struct RootView: View {
                     } label: {
                         targetAppLabel
                     }
-                    .menuStyle(.button).fixedSize()
+                    .menuStyle(.button)
+                    .frame(width: 196)
                     .disabled(controller.installedApps.isEmpty)
                 }
             }
@@ -135,12 +136,12 @@ struct RootView: View {
 
     private var targetAppLabel: some View {
         HStack(spacing: 6) {
-            if let app = controller.selectedApp,
-               let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
-                Image(nsImage: icon).resizable().frame(width: 16, height: 16)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            }
-            Text(targetAppLabelText)
+            AppIconThumbnail(icon: controller.selectedApp.flatMap {
+                appIcons.icon(bundleIdentifier: $0.bundleIdentifier, on: controller.selectedUDID)
+            }, side: 18)
+            Text(targetAppLabelText).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -168,6 +169,11 @@ struct RootView: View {
                 Text(controller.sourceKind.footerHint)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if controller.sourceKind.supportsFraming {
+                    Divider()
+                    FramingControls(controller: controller)
+                }
             }
         }
     }
@@ -191,10 +197,14 @@ struct RootView: View {
                     presetButton(1920, 1080)
                     presetButton(720, 1280)
                     Spacer()
+                    if controller.resolutionChangedWhileRunning {
+                        Button("Apply") { controller.restart() }
+                            .buttonStyle(.borderedProminent).controlSize(.small)
+                            .help("Relaunch the app at \(controller.width)×\(controller.height)")
+                    }
                 }
             }
-            .disabled(controller.isRunning)
-            .help("Frame size sent to the app. Tune Width and Height to fit the screen. Set before Start.")
+            .help("Frame size sent to the app. Tune Width and Height to fit the screen.")
         }
     }
 
@@ -231,6 +241,71 @@ struct RootView: View {
     }
 }
 
+// MARK: - App icon
+
+struct AppIconThumbnail: View {
+    let icon: NSImage?
+    var side: CGFloat = 18
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon).resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: side, height: side)
+                    .clipShape(RoundedRectangle(cornerRadius: side * 0.225, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: side * 0.225, style: .continuous)
+                    .fill(.quaternary).frame(width: side, height: side)
+                    .overlay(Image(systemName: "app.dashed").font(.system(size: side * 0.6)).foregroundStyle(.secondary))
+            }
+        }
+    }
+}
+
+// MARK: - Framing (fit/fill + pan)
+
+struct FramingControls: View {
+    @ObservedObject var controller: SessionController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker("Framing", selection: fillBinding) {
+                    Text("Fill").tag(true)
+                    Text("Fit").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 120)
+                .help("Fill crops to cover the frame; Fit shows the whole image with bars.")
+                Spacer()
+                if !controller.crop.isCentered {
+                    Button("Center") { controller.crop = CropSpec(fill: controller.crop.fill) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+            if controller.crop.fill {
+                panSlider("Pan X", binding: panXBinding)
+                panSlider("Pan Y", binding: panYBinding)
+            }
+        }
+    }
+
+    private func panSlider(_ title: String, binding: Binding<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+            Slider(value: binding, in: -1...1)
+        }
+    }
+
+    private var fillBinding: Binding<Bool> {
+        Binding(get: { controller.crop.fill }, set: { controller.crop = CropSpec(fill: $0, panX: controller.crop.panX, panY: controller.crop.panY) })
+    }
+    private var panXBinding: Binding<Double> {
+        Binding(get: { controller.crop.panX }, set: { controller.crop = CropSpec(fill: controller.crop.fill, panX: $0, panY: controller.crop.panY) })
+    }
+    private var panYBinding: Binding<Double> {
+        Binding(get: { controller.crop.panY }, set: { controller.crop = CropSpec(fill: controller.crop.fill, panX: controller.crop.panX, panY: $0) })
+    }
+}
+
 // MARK: - Viewfinder
 
 struct ViewfinderCard: View {
@@ -240,7 +315,7 @@ struct ViewfinderCard: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
-            content
+            SourceVisual(controller: controller, selfView: selfView)
         }
         .frame(height: 188)
         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -249,73 +324,137 @@ struct ViewfinderCard: View {
             if controller.isRunning {
                 LiveBadge().padding(10)
                     .help("Streaming frames to the app. Press Stop to tear down.")
+                    .transition(.opacity)
             }
         }
+        .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
+        .overlay(alignment: .bottomTrailing) {
+            DeviceFramePiP(aspect: controller.deviceAspect) {
+                SourceVisual(controller: controller, selfView: selfView)
+            }
+            .padding(10)
+            .help("How the source maps onto the selected device")
+        }
+        .animation(.easeInOut(duration: 0.2), value: controller.isRunning)
     }
 
-    @ViewBuilder private var content: some View {
+    @ViewBuilder private var sourceActions: some View {
         switch controller.sourceKind {
-        case .image: ImageViewfinder(controller: controller)
-        case .webcam: WebcamViewfinder(selfView: selfView)
-        case .video: VideoViewfinder(controller: controller)
-        case .qr: QRViewfinder(controller: controller)
+        case .image:
+            if controller.imagePath.isEmpty {
+                Button { controller.chooseImage() } label: { Label("Choose Image", systemImage: "photo.badge.plus") }
+                    .buttonStyle(.glass).controlSize(.small)
+            } else {
+                HStack(spacing: 6) {
+                    Button { controller.chooseImage() } label: { Label("Change", systemImage: "photo") }
+                        .buttonStyle(.glass).controlSize(.small)
+                    Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless).help("Use the test image")
+                }
+            }
+        case .video:
+            Button { controller.chooseVideo() } label: {
+                Label(controller.videoPath.isEmpty ? "Choose Video" : "Change", systemImage: controller.videoPath.isEmpty ? "plus" : "film")
+            }
+            .buttonStyle(.glass).controlSize(.small)
+        case .webcam:
+            if selfView.authorization != .authorized {
+                Button(selfView.authorization == .denied ? "Open Settings" : "Enable Camera") {
+                    if selfView.authorization == .denied {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } else {
+                        Task { await selfView.requestAccessAndStart() }
+                    }
+                }
+                .buttonStyle(.glass).controlSize(.small)
+            }
+        case .qr:
+            EmptyView()
         }
     }
 }
 
-struct ImageViewfinder: View {
+/// The pure pixels of the active source with the crop/fit applied — shared by the big viewfinder
+/// and the device-frame preview so both agree.
+struct SourceVisual: View {
     @ObservedObject var controller: SessionController
-    @State private var loadedImage: NSImage?
-    @State private var loadFailed = false
+    @ObservedObject var selfView: SelfViewModel
 
     var body: some View {
-        Group {
-            if controller.imagePath.isEmpty {
-                ZStack(alignment: .bottom) {
-                    TestPatternView()
-                    Button { controller.chooseImage() } label: {
-                        Label("Choose Image", systemImage: "photo.badge.plus")
-                    }
-                    .buttonStyle(.glass).controlSize(.small).padding(10)
-                }
-            } else if let image = loadedImage {
-                Image(nsImage: image).resizable().scaledToFill()
-                    .overlay(alignment: .topTrailing) {
-                        Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.borderless).padding(8).help("Use the built-in test image")
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        Button { controller.chooseImage() } label: { Label("Change", systemImage: "photo") }
-                            .buttonStyle(.glass).controlSize(.small).padding(10)
-                    }
-            } else if loadFailed {
-                ContentUnavailableView {
-                    Label("Image Unavailable", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text("That file could not be loaded.")
-                } actions: {
-                    Button("Choose Image") { controller.chooseImage() }.buttonStyle(.glass)
-                }
-            } else {
-                ProgressView()
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: controller.imagePath) { await reload() }
+        visual
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .animation(.easeOut(duration: 0.15), value: controller.crop)
     }
 
-    private func reload() async {
-        let path = controller.imagePath
-        guard !path.isEmpty else { loadedImage = nil; loadFailed = false; return }
-        let data = await Task.detached { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value
-        guard controller.imagePath == path else { return }
-        if let data, let image = NSImage(data: data) {
-            loadedImage = image
-            loadFailed = false
-        } else {
-            loadedImage = nil
-            loadFailed = true
+    @ViewBuilder private var visual: some View {
+        switch controller.sourceKind {
+        case .image:
+            if controller.imagePath.isEmpty {
+                TestPatternView()
+            } else if let image = controller.previewImage {
+                framed(Image(nsImage: image))
+            } else {
+                Color.black
+            }
+        case .webcam:
+            if selfView.authorization == .authorized {
+                CameraPreview(session: selfView.session)
+            } else {
+                Color.black.overlay(Image(systemName: "web.camera").font(.title).foregroundStyle(.white.opacity(0.4)))
+            }
+        case .video:
+            Color.black.overlay(
+                VStack(spacing: 6) {
+                    Image(systemName: "film").font(.system(size: 26)).foregroundStyle(.white.opacity(0.5))
+                    if !controller.videoPath.isEmpty {
+                        Text((controller.videoPath as NSString).lastPathComponent)
+                            .font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.horizontal, 20)
+                    }
+                }
+            )
+        case .qr:
+            if let qr = QRThumbnail.render(controller.qrText), !controller.qrText.isEmpty {
+                Color(white: 0.96).overlay(
+                    Image(nsImage: qr).resizable().interpolation(.none).scaledToFit().padding(8)
+                )
+            } else {
+                Color(white: 0.96).overlay(Image(systemName: "qrcode").font(.title).foregroundStyle(.black.opacity(0.25)))
+            }
         }
+    }
+
+    @ViewBuilder private func framed(_ image: Image) -> some View {
+        if controller.crop.fill {
+            image.resizable().aspectRatio(contentMode: .fill)
+                .offset(x: CGFloat(controller.crop.panX) * 36, y: CGFloat(controller.crop.panY) * 36)
+        } else {
+            image.resizable().aspectRatio(contentMode: .fit)
+        }
+    }
+}
+
+/// A small phone bezel showing how the source looks on the selected device (its aspect/crop).
+struct DeviceFramePiP<Content: View>: View {
+    let aspect: CGFloat
+    @ViewBuilder var content: Content
+    private let frameHeight: CGFloat = 84
+
+    var body: some View {
+        let width = max(28, frameHeight * aspect)
+        content
+            .frame(width: width, height: frameHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(3)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.black))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.5), lineWidth: 1.5))
+            .overlay(alignment: .top) {
+                Capsule().fill(.black).frame(width: width * 0.34, height: 4).padding(.top, 4)
+            }
+            .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            .accessibilityLabel("Device preview")
     }
 }
 
@@ -332,75 +471,6 @@ struct TestPatternView: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(bars.indices, id: \.self) { bars[$0] }
-        }
-    }
-}
-
-struct WebcamViewfinder: View {
-    @ObservedObject var selfView: SelfViewModel
-    var body: some View {
-        if selfView.authorization == .authorized {
-            CameraPreview(session: selfView.session)
-        } else {
-            ContentUnavailableView {
-                Label("Camera Off", systemImage: "web.camera")
-            } description: {
-                Text(selfView.authorization == .denied
-                     ? "Enable camera access in System Settings › Privacy."
-                     : "Allow camera access to see your live preview.")
-            } actions: {
-                Button(selfView.authorization == .denied ? "Open Settings" : "Enable Camera") {
-                    if selfView.authorization == .denied {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    } else {
-                        Task { await selfView.requestAccessAndStart() }
-                    }
-                }
-                .buttonStyle(.glass)
-            }
-        }
-    }
-}
-
-struct VideoViewfinder: View {
-    @ObservedObject var controller: SessionController
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "film").font(.system(size: 30, weight: .light)).foregroundStyle(.secondary)
-            if controller.videoPath.isEmpty {
-                Button { controller.chooseVideo() } label: { Label("Choose Video", systemImage: "plus") }
-                    .buttonStyle(.glass).controlSize(.small)
-                Text("MP4 or MOV. It loops automatically.").font(.caption2).foregroundStyle(.secondary)
-            } else {
-                Text((controller.videoPath as NSString).lastPathComponent)
-                    .font(.caption).lineLimit(1).truncationMode(.middle).padding(.horizontal, 24)
-                Button { controller.chooseVideo() } label: { Label("Change", systemImage: "film") }
-                    .buttonStyle(.glass).controlSize(.small)
-            }
-        }
-    }
-}
-
-struct QRViewfinder: View {
-    @ObservedObject var controller: SessionController
-    var body: some View {
-        if controller.qrText.isEmpty {
-            ContentUnavailableView {
-                Label("QR Code", systemImage: "qrcode")
-            } description: {
-                Text("Enter text below — it becomes a QR the app can scan.")
-            }
-        } else if let image = QRThumbnail.render(controller.qrText) {
-            Image(nsImage: image)
-                .resizable().interpolation(.none).scaledToFit()
-                .padding(12)
-                .frame(width: 140, height: 140)
-                .background(RoundedRectangle(cornerRadius: 16).fill(.white))
-                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator, lineWidth: 1))
-        } else {
-            ContentUnavailableView("QR Code", systemImage: "qrcode")
         }
     }
 }
@@ -447,7 +517,7 @@ struct SourceDetailRow: View {
         } else if controller.sourceKind == .qr {
             LabeledContent("Text") {
                 TextField("Text to encode", text: $controller.qrText)
-                    .textFieldStyle(.roundedBorder).frame(maxWidth: 190)
+                    .textFieldStyle(.roundedBorder).frame(width: 190)
             }
         }
     }

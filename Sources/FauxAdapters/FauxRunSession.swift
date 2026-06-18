@@ -33,9 +33,19 @@ public final class FauxRunSession: @unchecked Sendable {
         }
     }
 
+    private final class CropBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: CropSpec = .identity
+        var value: CropSpec {
+            get { lock.lock(); defer { lock.unlock() }; return stored }
+            set { lock.lock(); stored = newValue; lock.unlock() }
+        }
+    }
+
     private let runSimctl: ([String], [String: String]?) -> Int32
     private let fileExists: (String) -> Bool
     private let sourceFactory = FrameSourceFactory()
+    private let cropBox = CropBox()
     private var transport: UnixSocketTransport?
     private var serverThread: Thread?
     private var device: SimDevice?
@@ -54,7 +64,8 @@ public final class FauxRunSession: @unchecked Sendable {
         guard fileExists(configuration.dylibPath) else { throw StartError.dylibMissing(configuration.dylibPath) }
 
         let transport = try UnixSocketTransport(listeningAt: configuration.socketPath)
-        let coordinator = StreamCoordinator(source: sourceFactory.make(sourceSpec), transport: transport)
+        let source = sourceFactory.make(sourceSpec, crop: { [cropBox] in cropBox.value })
+        let coordinator = StreamCoordinator(source: source, transport: transport)
         let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
         serverThread.start()
 
@@ -86,6 +97,11 @@ public final class FauxRunSession: @unchecked Sendable {
         }
         device = nil
         bundleIdentifier = nil
+    }
+
+    /// Live crop/pan applied to the running source (image/video) on the next pulled frame.
+    public func setCrop(_ crop: CropSpec) {
+        cropBox.value = crop
     }
 
     private func joinServerThread(_ thread: Thread, timeout: TimeInterval = 2) {

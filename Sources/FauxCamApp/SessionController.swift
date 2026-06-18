@@ -36,6 +36,7 @@ final class SessionController: ObservableObject {
             }
         }
         var needsDetail: Bool { self == .video || self == .qr }
+        var supportsFraming: Bool { self == .image || self == .video }
         var detailPrompt: String { self == .video ? "/path/to/clip.mov" : "Text to encode" }
         var footerHint: String {
             switch self {
@@ -57,9 +58,28 @@ final class SessionController: ObservableObject {
     @Published var sourceKind: SourceKind = .image
     @Published var width: Int = 1280
     @Published var height: Int = 720
-    @Published var imagePath: String = ""
+    @Published var crop: CropSpec = .identity { didSet { session.setCrop(crop) } }
+    @Published var deviceAspect: Double = 9.0 / 19.5
+    @Published private(set) var appliedWidth: Int = 0
+    @Published private(set) var appliedHeight: Int = 0
+    @Published var imagePath: String = "" { didSet { loadPreviewImage() } }
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
+    @Published private(set) var previewImage: NSImage?
+
+    private func loadPreviewImage() {
+        let path = imagePath
+        guard !path.isEmpty else { previewImage = nil; return }
+        Task.detached {
+            let data = try? Data(contentsOf: URL(fileURLWithPath: path))
+            let image = data.flatMap { NSImage(data: $0) }
+            await MainActor.run { if self.imagePath == path { self.previewImage = image } }
+        }
+    }
+
+    var resolutionChangedWhileRunning: Bool {
+        isRunning && (width != appliedWidth || height != appliedHeight)
+    }
     @Published var isRunning: Bool = false
     @Published var isBusy: Bool = false
     @Published var status: String = "Ready when you are."
@@ -132,12 +152,41 @@ final class SessionController: ObservableObject {
             selectedUDID = devices.first?.udid ?? ""
         }
         refreshInstalledApps()
+        refreshDeviceAspect()
     }
 
     func selectDevice(_ udid: String) {
         guard udid != selectedUDID else { return }
         selectedUDID = udid
         refreshInstalledApps()
+        refreshDeviceAspect()
+    }
+
+    func refreshDeviceAspect() {
+        let udid = selectedUDID
+        guard !udid.isEmpty else { return }
+        Task.detached {
+            guard let aspect = SessionController.fetchDeviceAspect(udid: udid) else { return }
+            await MainActor.run {
+                guard udid == self.selectedUDID else { return }
+                self.deviceAspect = aspect
+            }
+        }
+    }
+
+    nonisolated static func fetchDeviceAspect(udid: String) -> Double? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "io", udid, "screenshot", "--type=png", "-"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let rep = NSBitmapImageRep(data: data), rep.pixelsHigh > 0 else { return nil }
+        return Double(rep.pixelsWide) / Double(rep.pixelsHigh)
     }
 
     func chooseImage() {
@@ -179,10 +228,12 @@ final class SessionController: ObservableObject {
         guard canStart, let device = selectedDevice else { return }
         let spec = resolvedSourceSpec
         let bundle = bundleIdentifier
+        let startWidth = width, startHeight = height
         let configuration = FauxRunSession.Configuration(
             dylibPath: dylibPath, socketPath: socketPath,
-            width: width, height: height
+            width: startWidth, height: startHeight
         )
+        session.setCrop(crop)
         isBusy = true
         isError = false
         status = "Launching \(device.name)…"
@@ -193,6 +244,8 @@ final class SessionController: ObservableObject {
                     self.isBusy = false
                     self.isRunning = true
                     self.isError = false
+                    self.appliedWidth = startWidth
+                    self.appliedHeight = startHeight
                     self.status = "serving \(spec) → \(bundle)"
                 }
             } catch {
@@ -219,6 +272,15 @@ final class SessionController: ObservableObject {
                 self.status = "Stopped"
             }
         }
+    }
+
+    /// Re-launches the session at the current resolution (a running app can't change its advertised
+    /// camera format live, so a new size needs a relaunch). Crop/pan, by contrast, applies live.
+    func restart() {
+        guard isRunning, !isBusy else { return }
+        stopSynchronously()
+        status = "Restarting at \(width)×\(height)…"
+        start()
     }
 
     /// Tears the session down inline (blocking). Used on app termination, where the process exits
