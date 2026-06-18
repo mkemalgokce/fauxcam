@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build the FauxCam app icon (FauxCam.icns) from the artwork Icons/appicon.png
-# and the menu-bar template glyph (MenuBarIcon.pdf) from make_icon.py.
+# Build the FauxCam app icon (FauxCam.icns) from the artwork Icons/appicon.png.
+# The same appicon.png is used directly (in color) as the menu-bar item image,
+# so no separate template glyph is generated.
 #
-# Requires: iconutil + sips (Xcode CLT) for the app icon;
-#           rsvg-convert (brew install librsvg) for the menu-bar template pdf.
-# Outputs into Icons/: FauxCam.icns, MenuBarIcon.pdf. sign-app.sh copies these
+# Requires: iconutil + sips (Xcode Command Line Tools).
+# Outputs into Icons/: FauxCam.icns. sign-app.sh copies it (and appicon.png)
 # into the app bundle's Resources.
 
 set -euo pipefail
@@ -15,7 +15,6 @@ APP_PNG="$ICONS/appicon.png"
 
 command -v iconutil >/dev/null || { echo "ERROR: iconutil missing (install Xcode Command Line Tools)"; exit 1; }
 command -v sips >/dev/null || { echo "ERROR: sips missing (install Xcode Command Line Tools)"; exit 1; }
-command -v rsvg-convert >/dev/null || { echo "ERROR: rsvg-convert missing (brew install librsvg)"; exit 1; }
 [ -f "$APP_PNG" ] || { echo "ERROR: $APP_PNG missing (the 1024x1024 app artwork)"; exit 1; }
 
 echo "==> Building FauxCam.icns from appicon.png"
@@ -30,9 +29,4 @@ done
 iconutil -c icns "$ICONSET" -o "$ICONS/FauxCam.icns"
 rm -rf "$ICONSET"
 
-echo "==> Building MenuBarIcon.pdf (vector template)"
-TEMPLATE_SVG="$ICONS/menubar-template.svg"
-python3 "$ICONS/make_icon.py" --kind template > "$TEMPLATE_SVG"
-rsvg-convert -f pdf "$TEMPLATE_SVG" -o "$ICONS/MenuBarIcon.pdf"
-
-echo "==> Done: $ICONS/FauxCam.icns, $ICONS/MenuBarIcon.pdf"
+echo "==> Done: $ICONS/FauxCam.icns"

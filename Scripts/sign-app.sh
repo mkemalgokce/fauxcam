@@ -34,7 +34,7 @@ mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 cp "$BINARY" "$STAGE/Contents/MacOS/FauxCam"
 cp "$ROOT/dist/libFaux.dylib" "$STAGE/Contents/Resources/libFaux.dylib"
 cp "$ROOT/Icons/FauxCam.icns" "$STAGE/Contents/Resources/FauxCam.icns"
-cp "$ROOT/Icons/MenuBarIcon.pdf" "$STAGE/Contents/Resources/MenuBarIcon.pdf"
+cp "$ROOT/Icons/appicon.png" "$STAGE/Contents/Resources/appicon.png"
 cat > "$STAGE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,6 +66,7 @@ cat > "$ROOT/dist/FauxCam.entitlements" <<'ENT'
 ENT
 
 echo "==> Code-signing with identity: $IDENTITY"
+xattr -cr "$STAGE"
 codesign --force --options runtime --sign "$IDENTITY" "$STAGE/Contents/Resources/libFaux.dylib"
 codesign --force --options runtime --entitlements "$ROOT/dist/FauxCam.entitlements" --sign "$IDENTITY" "$STAGE"
 codesign --verify --deep --strict "$STAGE"

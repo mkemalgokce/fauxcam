@@ -30,11 +30,11 @@ struct FauxCamApp: App {
 
     private static var menuBarIcon: NSImage {
         let menuBarIconHeight = 18.0
-        if let iconURL = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf"),
-           let icon = NSImage(contentsOf: iconURL) {
-            icon.isTemplate = true
+        if let iconURL = Bundle.main.url(forResource: "appicon", withExtension: "png"),
+           let icon = NSImage(contentsOf: iconURL), icon.size.height > 0 {
             let aspectRatio = icon.size.width / icon.size.height
             icon.size = NSSize(width: menuBarIconHeight * aspectRatio, height: menuBarIconHeight)
+            icon.isTemplate = false
             icon.accessibilityDescription = "FauxCam"
             return icon
         }
@@ -59,73 +59,75 @@ struct RootView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 14) {
             ViewfinderCard(controller: controller, selfView: selfView)
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
 
-            Form {
-                Section {
-                    Picker(selection: simulatorSelection) {
-                        if controller.devices.isEmpty {
-                            Text("No booted simulators").tag(String?.none)
-                        }
-                        ForEach(controller.devices, id: \.udid) { device in
-                            Text(device.name).tag(String?.some(device.udid))
-                        }
-                    } label: {
-                        Label("Simulator", systemImage: "iphone.gen3")
-                    }
-                    .disabled(controller.devices.isEmpty)
-
-                    Picker(selection: $controller.bundleIdentifier) {
-                        if controller.installedApps.isEmpty {
-                            Text(controller.selectedUDID.isEmpty ? "Select a simulator first" : "No installed apps").tag("")
-                        }
-                        ForEach(controller.installedApps) { app in
-                            Text(app.displayName).tag(app.bundleIdentifier)
-                        }
-                    } label: {
-                        Label("Target App", systemImage: "app.dashed")
-                    }
-                    .disabled(controller.installedApps.isEmpty)
-                } header: {
-                    HStack {
-                        Text("Destination")
-                        Spacer()
-                        Button("Refresh", systemImage: "arrow.clockwise") { controller.refresh() }
-                            .labelStyle(.iconOnly)
+            VStack(spacing: 12) {
+                GroupBox {
+                    VStack(spacing: 10) {
+                        HStack {
+                            Label("Simulator", systemImage: "iphone.gen3")
+                            Spacer()
+                            Picker("Simulator", selection: simulatorSelection) {
+                                if controller.devices.isEmpty {
+                                    Text("None booted").tag(String?.none)
+                                }
+                                ForEach(controller.devices, id: \.udid) { device in
+                                    Text(device.name).tag(String?.some(device.udid))
+                                }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            .disabled(controller.devices.isEmpty)
+                            Button { controller.refresh() } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
                             .buttonStyle(.borderless)
                             .help("Refresh simulators and installed apps")
-                    }
-                } footer: {
-                    if controller.devices.isEmpty {
-                        Text("Boot a simulator in Xcode, then tap Refresh.")
+                        }
+                        Divider()
+                        HStack {
+                            Label("Target App", systemImage: "app.dashed")
+                            Spacer()
+                            Picker("Target App", selection: $controller.bundleIdentifier) {
+                                if controller.installedApps.isEmpty {
+                                    Text(controller.selectedUDID.isEmpty ? "Select a simulator" : "No apps").tag("")
+                                }
+                                ForEach(controller.installedApps) { app in
+                                    Text(app.displayName).tag(app.bundleIdentifier)
+                                }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            .disabled(controller.installedApps.isEmpty)
+                        }
                     }
                 }
 
-                Section {
-                    Picker(selection: $controller.sourceKind) {
-                        ForEach(SessionController.SourceKind.allCases) { kind in
-                            Label(kind.title, systemImage: kind.symbol).tag(kind)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Source", selection: $controller.sourceKind) {
+                            ForEach(SessionController.SourceKind.allCases) { kind in
+                                Text(kind.shortTitle).tag(kind)
+                            }
                         }
-                    } label: {
-                        Label("Source", systemImage: "camera")
-                    }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
 
-                    if controller.sourceKind.needsDetail {
-                        SourceDetailRow(controller: controller)
+                        if controller.sourceKind.needsDetail {
+                            SourceDetailRow(controller: controller)
+                        }
+
+                        Text(controller.sourceKind.footerHint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                } header: {
-                    Text("Camera Feed")
-                } footer: {
-                    Text(controller.sourceKind.footerHint)
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
-            .scrollDisabled(true)
+            .padding(.horizontal, 16)
 
             ActionBar(controller: controller)
         }

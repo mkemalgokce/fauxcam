@@ -17,6 +17,14 @@ final class SessionController: ObservableObject {
             case .qr: return "QR Code"
             }
         }
+        var shortTitle: String {
+            switch self {
+            case .image: return "Image"
+            case .webcam: return "Camera"
+            case .video: return "Video"
+            case .qr: return "QR"
+            }
+        }
         var symbol: String {
             switch self {
             case .image: return "photo"
