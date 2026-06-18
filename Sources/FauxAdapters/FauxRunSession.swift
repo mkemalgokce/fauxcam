@@ -20,10 +20,16 @@ public final class FauxRunSession: @unchecked Sendable {
     public struct Configuration: Sendable {
         public let dylibPath: String
         public let socketPath: String
+        public let width: Int?
+        public let height: Int?
+        public let framesPerSecond: Int?
 
-        public init(dylibPath: String, socketPath: String) {
+        public init(dylibPath: String, socketPath: String, width: Int? = nil, height: Int? = nil, framesPerSecond: Int? = nil) {
             self.dylibPath = dylibPath
             self.socketPath = socketPath
+            self.width = width
+            self.height = height
+            self.framesPerSecond = framesPerSecond
         }
     }
 
@@ -55,6 +61,9 @@ public final class FauxRunSession: @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         environment["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = configuration.dylibPath
         environment["SIMCTL_CHILD_FAUXCAM_SOCKET"] = configuration.socketPath
+        if let width = configuration.width { environment["SIMCTL_CHILD_FAUXCAM_WIDTH"] = String(width) }
+        if let height = configuration.height { environment["SIMCTL_CHILD_FAUXCAM_HEIGHT"] = String(height) }
+        if let fps = configuration.framesPerSecond { environment["SIMCTL_CHILD_FAUXCAM_FPS"] = String(fps) }
         let status = runSimctl(["launch", "--terminate-running-process", device.udid, bundleIdentifier], environment)
         guard status == 0 else {
             transport.close()

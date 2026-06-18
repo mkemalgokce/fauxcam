@@ -10,17 +10,27 @@ final class AppIconStore: ObservableObject {
     @Published private(set) var icons: [String: NSImage] = [:]
     private var inFlight: Set<String> = []
 
+    private func key(_ deviceUDID: String, _ bundleIdentifier: String) -> String {
+        "\(deviceUDID)|\(bundleIdentifier)"
+    }
+
+    /// The cached icon for an app on a specific simulator (icons are keyed per device, since the
+    /// same bundle id can be installed on several simulators).
+    func icon(bundleIdentifier: String, on deviceUDID: String) -> NSImage? {
+        icons[key(deviceUDID, bundleIdentifier)]
+    }
+
     func load(_ apps: [InstalledApp], on deviceUDID: String) {
         guard !deviceUDID.isEmpty else { return }
         for app in apps {
-            let key = "\(deviceUDID)|\(app.bundleIdentifier)"
-            if icons[app.bundleIdentifier] != nil || inFlight.contains(key) { continue }
-            inFlight.insert(key)
+            let cacheKey = key(deviceUDID, app.bundleIdentifier)
+            if icons[cacheKey] != nil || inFlight.contains(cacheKey) { continue }
+            inFlight.insert(cacheKey)
             Task.detached(priority: .utility) {
                 let image = AppIconStore.loadIcon(deviceUDID: deviceUDID, bundleIdentifier: app.bundleIdentifier)
                 await MainActor.run {
-                    self.inFlight.remove(key)
-                    if let image { self.icons[app.bundleIdentifier] = image }
+                    self.inFlight.remove(cacheKey)
+                    if let image { self.icons[cacheKey] = image }
                 }
             }
         }

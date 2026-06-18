@@ -51,7 +51,34 @@ final class SessionController: ObservableObject {
     @Published var selectedUDID: String = ""
     @Published var installedApps: [InstalledApp] = []
     @Published var bundleIdentifier: String = ""
+    enum Resolution: String, CaseIterable, Identifiable {
+        case vga, hd720, hd1080
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .vga: return "480p"
+            case .hd720: return "720p"
+            case .hd1080: return "1080p"
+            }
+        }
+        var width: Int {
+            switch self {
+            case .vga: return 640
+            case .hd720: return 1280
+            case .hd1080: return 1920
+            }
+        }
+        var height: Int {
+            switch self {
+            case .vga: return 480
+            case .hd720: return 720
+            case .hd1080: return 1080
+            }
+        }
+    }
+
     @Published var sourceKind: SourceKind = .image
+    @Published var resolution: Resolution = .hd720
     @Published var imagePath: String = ""
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
@@ -140,6 +167,7 @@ final class SessionController: ObservableObject {
         panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff, .gif, .bmp, .image]
         panel.canChooseDirectories = false
         panel.prompt = "Use Image"
+        NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url { imagePath = url.path }
     }
 
@@ -148,6 +176,7 @@ final class SessionController: ObservableObject {
         panel.allowedContentTypes = [.movie, .video, .quickTimeMovie, .mpeg4Movie]
         panel.canChooseDirectories = false
         panel.prompt = "Use Video"
+        NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url { videoPath = url.path }
     }
 
@@ -172,7 +201,10 @@ final class SessionController: ObservableObject {
         guard canStart, let device = selectedDevice else { return }
         let spec = resolvedSourceSpec
         let bundle = bundleIdentifier
-        let configuration = FauxRunSession.Configuration(dylibPath: dylibPath, socketPath: socketPath)
+        let configuration = FauxRunSession.Configuration(
+            dylibPath: dylibPath, socketPath: socketPath,
+            width: resolution.width, height: resolution.height
+        )
         isBusy = true
         isError = false
         status = "Launching \(device.name)…"

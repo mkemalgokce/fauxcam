@@ -1,19 +1,27 @@
 import Foundation
 import CoreImage
+import ImageIO
 import AppKit
 import FauxDomain
 
 /// Vends a single still image (a user-picked file or the built-in test pattern) scaled to each
-/// demand. The image is decoded once and cached as a `CIImage`; every frame is an aspect-filled
-/// render at the requested resolution.
+/// demand. The image is decoded once (downsampled, EXIF-oriented) and the rendered BGRA buffer is
+/// cached per output size, since a still never changes frame to frame.
 public final class CustomImageSource: FrameSource, @unchecked Sendable {
     private let sourceImage: CIImage
     private let scaler = PixelBufferScaler()
     private let clock: @Sendable () -> UInt64
+    private let cacheLock = NSLock()
+    private var cached: (width: Int, height: Int, position: CameraPosition, bytesPerRow: Int, pixels: [UInt8])?
 
-    public init?(contentsOf url: URL, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
-        guard let nsImage = NSImage(contentsOf: url),
-              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+    public init?(contentsOf url: URL, maxPixelSize: Int = 1920, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { return nil }
         self.sourceImage = CIImage(cgImage: cgImage)
         self.clock = clock
     }
@@ -24,14 +32,25 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
     }
 
     public func frame(satisfying demand: Demand) throws -> Frame {
-        scaler.frame(
-            from: sourceImage,
-            aspectFill: true,
-            position: demand.position,
-            width: demand.requestedWidth,
-            height: demand.requestedHeight,
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cached,
+           cached.width == demand.requestedWidth,
+           cached.height == demand.requestedHeight,
+           cached.position == demand.position {
+            return Frame(
+                position: cached.position, pixelFormat: .bgra32,
+                width: cached.width, height: cached.height, bytesPerRow: cached.bytesPerRow,
+                presentationTimeNanoseconds: clock(), pixels: cached.pixels
+            )
+        }
+        guard let frame = scaler.frame(
+            from: sourceImage, aspectFill: true,
+            position: demand.position, width: demand.requestedWidth, height: demand.requestedHeight,
             presentationTimeNanoseconds: clock()
-        ) ?? blackFrame(for: demand, clock: clock)
+        ) else { return blackFrame(for: demand, clock: clock) }
+        cached = (frame.width, frame.height, frame.position, frame.bytesPerRow, frame.pixels)
+        return frame
     }
 
     /// A recognizable SMPTE-style color-bar pattern, used when the user has not picked an image

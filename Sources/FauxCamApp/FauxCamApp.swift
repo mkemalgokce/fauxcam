@@ -80,11 +80,13 @@ struct RootView: View {
         }
         .onAppear {
             controller.refresh()
+            appIcons.load(controller.installedApps, on: controller.selectedUDID)
             syncSelfView()
         }
         .onDisappear { selfView.stop() }
         .onChange(of: controller.sourceKind) { _, _ in syncSelfView() }
         .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
+        .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { selfView.stop() } else { syncSelfView() }
         }
@@ -127,15 +129,20 @@ struct RootView: View {
                 HStack {
                     Label("Target App", systemImage: "app.dashed")
                     Spacer()
-                    Picker("Target App", selection: $controller.bundleIdentifier) {
-                        if controller.installedApps.isEmpty {
-                            Text(controller.selectedUDID.isEmpty ? "Select a simulator" : "No user apps").tag("")
-                        }
+                    Menu {
                         ForEach(controller.installedApps) { app in
-                            appRow(app).tag(app.bundleIdentifier)
+                            Button { controller.bundleIdentifier = app.bundleIdentifier } label: {
+                                if let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
+                                    Image(nsImage: icon)
+                                }
+                                Text(app.displayName)
+                            }
                         }
+                    } label: {
+                        targetAppLabel
                     }
-                    .labelsHidden().fixedSize()
+                    .menuStyle(.button)
+                    .fixedSize()
                     .disabled(controller.installedApps.isEmpty)
                 }
                 if controller.devices.isEmpty {
@@ -145,22 +152,27 @@ struct RootView: View {
         }
     }
 
-    private func appRow(_ app: InstalledApp) -> some View {
+    private var targetAppLabel: some View {
         HStack(spacing: 6) {
-            if let icon = appIcons.icons[app.bundleIdentifier] {
+            if let app = controller.selectedApp,
+               let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
                 Image(nsImage: icon).resizable().frame(width: 16, height: 16)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
-            } else {
-                Image(systemName: "app.dashed").foregroundStyle(.secondary)
             }
-            Text(app.displayName)
+            Text(targetAppLabelText)
         }
+    }
+
+    private var targetAppLabelText: String {
+        if let app = controller.selectedApp { return app.displayName }
+        if controller.selectedUDID.isEmpty { return "Select a simulator" }
+        return controller.installedApps.isEmpty ? "No user apps" : "Select an app"
     }
 
     private var sourceSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Picker("Source", selection: $controller.sourceKind) {
+                Picker("Source", selection: $controller.sourceKind.animation(.smooth(duration: 0.25))) {
                     ForEach(SessionController.SourceKind.allCases) { kind in
                         Text(kind.shortTitle).tag(kind)
                     }
@@ -169,8 +181,21 @@ struct RootView: View {
 
                 if controller.sourceKind.needsDetail {
                     SourceDetailRow(controller: controller)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 hint(controller.sourceKind.footerHint)
+
+                Divider()
+                HStack {
+                    Label("Resolution", systemImage: "rectangle.dashed")
+                    Spacer()
+                    Picker("Resolution", selection: $controller.resolution) {
+                        ForEach(SessionController.Resolution.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .disabled(controller.isRunning)
+                    .help("Frame size sent to the app. Set before Start.")
+                }
             }
         }
     }
@@ -200,6 +225,8 @@ struct ViewfinderCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
             content
+                .id(controller.sourceKind)
+                .transition(.opacity)
         }
         .frame(height: 188)
         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -209,8 +236,11 @@ struct ViewfinderCard: View {
                 LiveBadge()
                     .padding(10)
                     .help("Streaming frames to the app. Press Stop to tear down.")
+                    .transition(.scale.combined(with: .opacity))
             }
         }
+        .animation(.smooth(duration: 0.28), value: controller.sourceKind)
+        .animation(.snappy, value: controller.isRunning)
     }
 
     @ViewBuilder private var content: some View {
@@ -225,34 +255,55 @@ struct ViewfinderCard: View {
 
 struct ImageViewfinder: View {
     @ObservedObject var controller: SessionController
+    @State private var loadedImage: NSImage?
+    @State private var loadFailed = false
 
     var body: some View {
-        if controller.imagePath.isEmpty {
-            ZStack(alignment: .bottom) {
-                TestPatternView()
-                Button { controller.chooseImage() } label: {
-                    Label("Choose Image", systemImage: "photo.badge.plus")
+        Group {
+            if controller.imagePath.isEmpty {
+                ZStack(alignment: .bottom) {
+                    TestPatternView()
+                    Button { controller.chooseImage() } label: {
+                        Label("Choose Image", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(.glass).controlSize(.small).padding(10)
                 }
-                .buttonStyle(.glass).controlSize(.small).padding(10)
+            } else if let image = loadedImage {
+                Image(nsImage: image).resizable().scaledToFill()
+                    .overlay(alignment: .topTrailing) {
+                        Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.borderless).padding(8).help("Use the built-in test image")
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Button { controller.chooseImage() } label: { Label("Change", systemImage: "photo") }
+                            .buttonStyle(.glass).controlSize(.small).padding(10)
+                    }
+            } else if loadFailed {
+                ContentUnavailableView {
+                    Label("Image Unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text("That file could not be loaded.")
+                } actions: {
+                    Button("Choose Image") { controller.chooseImage() }.buttonStyle(.glass)
+                }
+            } else {
+                ProgressView()
             }
-        } else if let image = NSImage(contentsOfFile: controller.imagePath) {
-            Image(nsImage: image).resizable().scaledToFill()
-                .overlay(alignment: .topTrailing) {
-                    Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless).padding(8).help("Use the built-in test image")
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    Button { controller.chooseImage() } label: { Label("Change", systemImage: "photo") }
-                        .buttonStyle(.glass).controlSize(.small).padding(10)
-                }
+        }
+        .task(id: controller.imagePath) { await reload() }
+    }
+
+    private func reload() async {
+        let path = controller.imagePath
+        guard !path.isEmpty else { loadedImage = nil; loadFailed = false; return }
+        let data = await Task.detached { try? Data(contentsOf: URL(fileURLWithPath: path)) }.value
+        guard controller.imagePath == path else { return }
+        if let data, let image = NSImage(data: data) {
+            loadedImage = image
+            loadFailed = false
         } else {
-            ContentUnavailableView {
-                Label("Image Unavailable", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text("That file could not be loaded.")
-            } actions: {
-                Button("Choose Image") { controller.chooseImage() }.buttonStyle(.glass)
-            }
+            loadedImage = nil
+            loadFailed = true
         }
     }
 }
@@ -436,7 +487,12 @@ struct ActionBar: View {
             .tint(controller.isRunning ? .red : .accentColor)
             .controlSize(.large)
             .disabled(!controller.canStart && !controller.isRunning)
+            .help(controller.isRunning
+                  ? "Stop streaming and tear down."
+                  : "Relaunches the target app to inject FauxCam as its camera.")
+            .animation(.snappy, value: controller.isRunning)
         }
         .padding(14)
+        .animation(.snappy, value: controller.isBusy)
     }
 }
