@@ -165,29 +165,33 @@ final class SessionController: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { videoPath = url.path }
     }
 
-    /// True when the clipboard holds something usable for the current source (so Paste can be shown).
-    var clipboardHasUsableContent: Bool {
-        let board = NSPasteboard.general
-        switch sourceKind {
-        case .image: return board.canReadObject(forClasses: [NSImage.self]) || pasteboardFileURL(extensions: Self.imageExtensions) != nil
-        case .video: return pasteboardFileURL(extensions: Self.videoExtensions) != nil
-        case .qr: return board.string(forType: .string)?.isEmpty == false
-        case .webcam: return false
-        }
-    }
-
-    /// Paste for the active source: an image/video file URL, a copied image, or QR text.
+    /// Paste for the active source: a copied image/video file or image (Media), or QR text. For Media,
+    /// the pasted type decides whether it becomes an image or a video.
     func pasteFromClipboard() {
         switch sourceKind {
-        case .image:
-            if let url = pasteboardFileURL(extensions: Self.imageExtensions) { imagePath = url.path; return }
-            if let image = NSImage(pasteboard: .general), let path = saveTemporaryImage(image) { imagePath = path }
-        case .video:
-            if let url = pasteboardFileURL(extensions: Self.videoExtensions) { videoPath = url.path }
+        case .image, .video:
+            if let url = pasteboardFileURL(extensions: Self.videoExtensions) { videoPath = url.path; sourceKind = .video; return }
+            if let url = pasteboardFileURL(extensions: Self.imageExtensions) { imagePath = url.path; sourceKind = .image; return }
+            if let image = NSImage(pasteboard: .general), let path = saveTemporaryImage(image) { imagePath = path; sourceKind = .image }
         case .qr:
             if let text = NSPasteboard.general.string(forType: .string) { qrText = text }
         case .webcam:
             break
+        }
+    }
+
+    /// One picker for the Media tab — an image OR a video; the chosen type sets the source.
+    func chooseMedia() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .movie, .video, .quickTimeMovie, .mpeg4Movie]
+        panel.canChooseDirectories = false
+        panel.prompt = "Use"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if Self.videoExtensions.contains(url.pathExtension.lowercased()) {
+            videoPath = url.path; sourceKind = .video
+        } else {
+            imagePath = url.path; sourceKind = .image
         }
     }
 

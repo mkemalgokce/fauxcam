@@ -159,8 +159,7 @@ struct RootView: View {
             sourcePicker
                 .padding(.horizontal, 16)
 
-            statusRow
-            footer
+            bottomBar
         }
         .background { pasteShortcut }
         .onAppear {
@@ -185,18 +184,6 @@ struct RootView: View {
         autoMode.applyFrameSize(forDevice: controller.selectedUDID, aspect: controller.deviceAspect)
     }
 
-    private var footer: some View {
-        HStack {
-            Button { onOpenSettings() } label: { Label("Settings", systemImage: "gearshape") }
-                .buttonStyle(.borderless).controlSize(.small)
-            Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.borderless).controlSize(.small)
-        }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 10)
-    }
-
     private func sourceChanged() {
         reconfigurePreview()
         autoMode.setSourceDescriptor(controller.sourceDescriptor)
@@ -207,27 +194,27 @@ struct RootView: View {
         preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
-    // MARK: Running status (the app injecting = running)
+    // MARK: Bottom bar (running status + actions)
 
-    private var statusRow: some View {
-        HStack(spacing: 9) {
+    private var bottomBar: some View {
+        HStack(spacing: 8) {
             StatusDot(color: statusColor, pulsing: autoMode.isActive && !reduceMotion)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(statusTitle).font(.footnote.weight(.semibold))
-                Text(statusDetail).font(.caption2).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
+            Text(statusLine).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 6)
+            if autoMode.isActive, controller.devices.count > 1 {
+                Text("\(controller.devices.count)").font(.caption2.monospacedDigit().weight(.bold))
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(.green.opacity(0.2), in: .capsule).foregroundStyle(.green)
             }
-            Spacer()
-            if autoMode.isActive, controller.devices.count > 0 {
-                Text("\(controller.devices.count)").font(.caption.monospacedDigit().weight(.semibold))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(.green.opacity(0.18), in: .capsule)
-                    .foregroundStyle(.green)
-            }
+            Button { onOpenSettings() } label: { Image(systemName: "gearshape") }
+                .buttonStyle(.borderless).help("Settings")
+            Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
+                .buttonStyle(.borderless).help("Quit FauxCam")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .rect(cornerRadius: 12))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 16).padding(.bottom, 12)
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: autoMode.isActive)
     }
 
@@ -236,47 +223,64 @@ struct RootView: View {
         return autoMode.isActive ? .green : .orange
     }
 
-    private var statusTitle: String {
-        if autoMode.lastError != nil { return "Needs attention" }
-        if autoMode.isActive { return "Running" }
-        return controller.devices.isEmpty ? "Waiting" : "Connecting…"
-    }
-
-    private var statusDetail: String {
+    private var statusLine: String {
         if let error = autoMode.lastError { return error }
         if autoMode.isActive {
             let names = controller.devices.map(\.name)
-            if names.isEmpty { return "Injecting the camera" }
-            return names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) simulators injected"
+            if names.isEmpty { return "Running" }
+            return names.count == 1 ? "Running · \(names[0])" : "Running · \(names.count) simulators"
         }
-        return controller.devices.isEmpty ? "Boot a simulator to start" : "Starting injection…"
+        return controller.devices.isEmpty ? "Waiting for a simulator" : "Starting…"
     }
 
-    // MARK: Source (icon picker + per-kind input with paste)
+    // MARK: Source (Media / Camera / QR)
+
+    private enum SourceTab: CaseIterable, Identifiable {
+        case media, camera, qr
+        var id: Self { self }
+        var symbol: String {
+            switch self { case .media: return "photo.on.rectangle.angled"; case .camera: return "web.camera"; case .qr: return "qrcode" }
+        }
+        var title: String {
+            switch self { case .media: return "Media"; case .camera: return "Camera"; case .qr: return "QR" }
+        }
+    }
+
+    private var selectedTab: SourceTab {
+        switch controller.sourceKind { case .image, .video: return .media; case .webcam: return .camera; case .qr: return .qr }
+    }
+
+    private func selectTab(_ tab: SourceTab) {
+        switch tab {
+        case .media:
+            if controller.sourceKind != .image, controller.sourceKind != .video {
+                controller.sourceKind = controller.videoPath.isEmpty ? .image : .video
+            }
+        case .camera: controller.sourceKind = .webcam
+        case .qr: controller.sourceKind = .qr
+        }
+    }
 
     private var sourcePicker: some View {
         VStack(spacing: 8) {
             GlassEffectContainer {
                 HStack(spacing: 4) {
-                    ForEach(SessionController.SourceKind.allCases) { kind in
-                        sourceButton(kind)
-                    }
+                    ForEach(SourceTab.allCases) { tabButton($0) }
                 }
             }
-            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: controller.sourceKind)
+            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: selectedTab)
 
             sourceDetail
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: controller.sourceKind)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: selectedTab)
         }
     }
 
-    private func sourceButton(_ kind: SessionController.SourceKind) -> some View {
-        let selected = controller.sourceKind == kind
-        return Button { controller.sourceKind = kind } label: {
+    private func tabButton(_ tab: SourceTab) -> some View {
+        let selected = selectedTab == tab
+        return Button { selectTab(tab) } label: {
             VStack(spacing: 4) {
-                Image(systemName: kind.symbol).font(.system(size: 15, weight: .medium))
-                Text(kind.shortTitle).font(.caption2.weight(.medium))
+                Image(systemName: tab.symbol).font(.system(size: 15, weight: .medium))
+                Text(tab.title).font(.caption2.weight(.medium))
             }
             .frame(maxWidth: .infinity).padding(.vertical, 8)
             .foregroundStyle(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
@@ -286,35 +290,30 @@ struct RootView: View {
             }
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(kind.title)
+        .buttonStyle(.plain).accessibilityLabel(tab.title)
     }
 
     @ViewBuilder private var sourceDetail: some View {
-        switch controller.sourceKind {
-        case .image:
+        switch selectedTab {
+        case .media:
             HStack(spacing: 6) {
-                Button { controller.chooseImage() } label: {
-                    Label(controller.imagePath.isEmpty ? "Choose Image" : "Change", systemImage: "photo")
-                }
-                .buttonStyle(.glass).controlSize(.small)
+                Button { controller.chooseMedia() } label: { Label("Choose…", systemImage: "folder") }
+                    .buttonStyle(.glass).controlSize(.small)
                 Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
-                    .buttonStyle(.glass).controlSize(.small).help("Paste an image (⌘V)")
-                if !controller.imagePath.isEmpty {
-                    Button { controller.imagePath = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless).help("Use the test image")
-                }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste an image or video (⌘V)")
+                Text(mediaLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer()
-            }
-        case .video:
-            HStack(spacing: 6) {
-                Button { controller.chooseVideo() } label: {
-                    Label(controller.videoPath.isEmpty ? "Choose Video" : "Change", systemImage: "film")
+                if !controller.imagePath.isEmpty || !controller.videoPath.isEmpty {
+                    Button { controller.imagePath = ""; controller.videoPath = ""; controller.sourceKind = .image } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless).help("Use the test image")
                 }
-                .buttonStyle(.glass).controlSize(.small)
-                Button { controller.pasteFromClipboard() } label: { Label("Paste", systemImage: "clipboard") }
-                    .buttonStyle(.glass).controlSize(.small).help("Paste a video file (⌘V)")
-                Text(videoFileName).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+        case .camera:
+            HStack {
+                Text("Your Mac camera is mirrored into the simulator.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
             }
         case .qr:
@@ -323,20 +322,16 @@ struct RootView: View {
                 Button { controller.pasteFromClipboard() } label: { Image(systemName: "clipboard") }
                     .buttonStyle(.glass).controlSize(.small).help("Paste")
             }
-        case .webcam:
-            HStack {
-                Text(controller.sourceKind.footerHint).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-            }
         }
     }
 
-    private var videoFileName: String {
-        controller.videoPath.isEmpty ? "No file chosen" : (controller.videoPath as NSString).lastPathComponent
+    private var mediaLabel: String {
+        if controller.sourceKind == .video, !controller.videoPath.isEmpty { return (controller.videoPath as NSString).lastPathComponent }
+        if !controller.imagePath.isEmpty { return (controller.imagePath as NSString).lastPathComponent }
+        return "Test image"
     }
 
-    /// Invisible ⌘V handler that pastes into the active source (image/video). QR's field handles paste itself.
+    /// Invisible ⌘V handler that pastes into the active source (Media). QR's field handles paste itself.
     private var pasteShortcut: some View {
         Button("") { controller.pasteFromClipboard() }
             .keyboardShortcut("v", modifiers: .command)
