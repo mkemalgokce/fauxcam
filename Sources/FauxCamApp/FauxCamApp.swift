@@ -395,7 +395,7 @@ struct SourceVisual: View {
             if controller.imagePath.isEmpty {
                 TestPatternView()
             } else if let image = controller.previewImage {
-                framed(Image(nsImage: image))
+                framed(image)
             } else {
                 Color.black
             }
@@ -426,12 +426,25 @@ struct SourceVisual: View {
         }
     }
 
-    @ViewBuilder private func framed(_ image: Image) -> some View {
+    @ViewBuilder private func framed(_ nsImage: NSImage) -> some View {
         if controller.crop.fill {
-            image.resizable().aspectRatio(contentMode: .fill)
-                .offset(x: CGFloat(controller.crop.panX) * 36, y: CGFloat(controller.crop.panY) * 36)
+            GeometryReader { geo in
+                let frame = geo.size
+                let imageAspect = nsImage.size.width / max(nsImage.size.height, 1)
+                let frameAspect = frame.width / max(frame.height, 1)
+                let scaledWidth = imageAspect > frameAspect ? frame.height * imageAspect : frame.width
+                let scaledHeight = imageAspect > frameAspect ? frame.height : frame.width / imageAspect
+                let slackX = max(0, scaledWidth - frame.width)
+                let slackY = max(0, scaledHeight - frame.height)
+                Image(nsImage: nsImage).resizable()
+                    .frame(width: scaledWidth, height: scaledHeight)
+                    .offset(x: -CGFloat(controller.crop.panX) * slackX / 2,
+                            y: -CGFloat(controller.crop.panY) * slackY / 2)
+                    .frame(width: frame.width, height: frame.height)
+                    .clipped()
+            }
         } else {
-            image.resizable().aspectRatio(contentMode: .fit)
+            Image(nsImage: nsImage).resizable().aspectRatio(contentMode: .fit)
         }
     }
 }
@@ -440,12 +453,15 @@ struct SourceVisual: View {
 struct DeviceFramePiP<Content: View>: View {
     let aspect: CGFloat
     @ViewBuilder var content: Content
-    private let frameHeight: CGFloat = 84
+    private let maxHeight: CGFloat = 84
+    private let maxWidth: CGFloat = 100
 
     var body: some View {
-        let width = max(28, frameHeight * aspect)
+        let safeAspect = aspect.isFinite && aspect > 0 ? aspect : 9.0 / 19.5
+        let width = safeAspect >= 1 ? maxWidth : maxHeight * safeAspect
+        let height = safeAspect >= 1 ? maxWidth / safeAspect : maxHeight
         content
-            .frame(width: width, height: frameHeight)
+            .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.black))

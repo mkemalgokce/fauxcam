@@ -90,6 +90,7 @@ final class SessionController: ObservableObject {
     private let session: FauxRunSession
     private let dylibPath: String
     private var installedAppsGeneration = 0
+    private var aspectInFlight = false
 
     init(
         deviceProvider: SimDeviceProviding = SimctlDeviceProvider(),
@@ -164,11 +165,13 @@ final class SessionController: ObservableObject {
 
     func refreshDeviceAspect() {
         let udid = selectedUDID
-        guard !udid.isEmpty else { return }
+        guard !udid.isEmpty, !aspectInFlight else { return }
+        aspectInFlight = true
         Task.detached {
-            guard let aspect = SessionController.fetchDeviceAspect(udid: udid) else { return }
+            let aspect = SessionController.fetchDeviceAspect(udid: udid)
             await MainActor.run {
-                guard udid == self.selectedUDID else { return }
+                self.aspectInFlight = false
+                guard udid == self.selectedUDID, let aspect else { return }
                 self.deviceAspect = aspect
             }
         }
@@ -276,11 +279,19 @@ final class SessionController: ObservableObject {
 
     /// Re-launches the session at the current resolution (a running app can't change its advertised
     /// camera format live, so a new size needs a relaunch). Crop/pan, by contrast, applies live.
+    /// The teardown runs off the main actor so the menu bar never freezes.
     func restart() {
         guard isRunning, !isBusy else { return }
-        stopSynchronously()
+        isBusy = true
         status = "Restarting at \(width)×\(height)…"
-        start()
+        Task.detached { [session] in
+            session.stop()
+            await MainActor.run {
+                self.isRunning = false
+                self.isBusy = false
+                self.start()
+            }
+        }
     }
 
     /// Tears the session down inline (blocking). Used on app termination, where the process exits
