@@ -18,6 +18,9 @@ BUILD_CONFIG="release"
 APP_NAME="FauxCam.app"
 STAGE="$ROOT/dist/$APP_NAME"
 
+echo "==> Building app icon + menubar glyph"
+"$ROOT/Scripts/build-icons.sh"
+
 echo "==> Building guest dylib"
 "$ROOT/Scripts/build-dylib.sh"
 
