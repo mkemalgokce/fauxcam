@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8A4C"/>
+      <stop offset="1" stop-color="#E8521F"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+    <mask id="aperture"><rect width="1024" height="1024" fill="white"/><polygon points="512.00,486.00 581.28,526.00 581.28,606.00 512.00,646.00 442.72,606.00 442.72,526.00" fill="black"/><line x1="512.00" y1="486.00" x2="645.70" y2="406.66" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="581.28" y1="526.00" x2="716.84" y2="602.12" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="581.28" y1="606.00" x2="583.14" y2="761.46" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="512.00" y1="646.00" x2="378.30" y2="725.34" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="442.72" y1="606.00" x2="307.16" y2="529.88" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="442.72" y1="526.00" x2="440.86" y2="370.54" stroke="black" stroke-width="16.0" stroke-linecap="round"/></mask>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+  </g>
+  <polygon points="332,232 476,386 296,402" fill="#FFFFFF"/><polygon points="692,232 728,402 548,386" fill="#FFFFFF"/><polygon points="358,288 437,372 340,378" fill="#F0683A"/><polygon points="666,288 684,378 587,372" fill="#F0683A"/><circle cx="512.0" cy="566.0" r="208.0" fill="#FFFFFF" mask="url(#aperture)"/>
+</svg>

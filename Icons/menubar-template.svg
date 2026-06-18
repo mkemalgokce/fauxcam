@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="484" height="596" viewBox="270 206 484 596">
+  <defs>
+    <mask id="aperture"><rect width="1024" height="1024" fill="white"/><polygon points="512.00,486.00 581.28,526.00 581.28,606.00 512.00,646.00 442.72,606.00 442.72,526.00" fill="black"/><line x1="512.00" y1="486.00" x2="645.70" y2="406.66" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="581.28" y1="526.00" x2="716.84" y2="602.12" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="581.28" y1="606.00" x2="583.14" y2="761.46" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="512.00" y1="646.00" x2="378.30" y2="725.34" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="442.72" y1="606.00" x2="307.16" y2="529.88" stroke="black" stroke-width="16.0" stroke-linecap="round"/><line x1="442.72" y1="526.00" x2="440.86" y2="370.54" stroke="black" stroke-width="16.0" stroke-linecap="round"/></mask>
+  </defs>
+  <polygon points="332,232 476,386 296,402" fill="#000000"/><polygon points="692,232 728,402 548,386" fill="#000000"/><circle cx="512.0" cy="566.0" r="208.0" fill="#000000" mask="url(#aperture)"/>
+</svg>

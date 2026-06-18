@@ -45,7 +45,7 @@ final class SessionController: ObservableObject {
     @Published var sourceDetail: String = ""
     @Published var isRunning: Bool = false
     @Published var isBusy: Bool = false
-    @Published var status: String = "Idle"
+    @Published var status: String = "Ready when you are."
     @Published var isError: Bool = false
 
     private let deviceProvider: SimDeviceProviding
@@ -71,11 +71,19 @@ final class SessionController: ObservableObject {
     var selectedApp: InstalledApp? { installedApps.first { $0.bundleIdentifier == bundleIdentifier } }
     var socketPath: String { "/private/tmp/com.fauxcam/app-\(selectedUDID).sock" }
 
-    var canStart: Bool {
-        guard !isRunning, !isBusy, selectedDevice != nil, !bundleIdentifier.isEmpty else { return false }
-        if sourceKind.needsDetail && sourceDetail.isEmpty { return false }
-        if sourceKind == .webcam && AVCaptureDevice.authorizationStatus(for: .video) != .authorized { return false }
-        return true
+    var canStart: Bool { startBlockReason == nil && !isRunning && !isBusy }
+
+    /// Why Start is unavailable, phrased as a next step the user can act on — or nil when ready.
+    var startBlockReason: String? {
+        if selectedDevice == nil { return "Boot and select a simulator to start." }
+        if bundleIdentifier.isEmpty { return "Choose a target app to start." }
+        if sourceKind.needsDetail && sourceDetail.isEmpty {
+            return sourceKind == .video ? "Choose a video file to start." : "Enter QR text to start."
+        }
+        if sourceKind == .webcam && AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+            return "Allow camera access to start."
+        }
+        return nil
     }
 
     var resolvedSourceSpec: String {

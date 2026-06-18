@@ -48,7 +48,7 @@ struct RootView: View {
                 .padding(.bottom, 6)
 
             Form {
-                Section("Destination") {
+                Section {
                     Picker(selection: simulatorSelection) {
                         if controller.devices.isEmpty {
                             Text("No booted simulators").tag(String?.none)
@@ -63,7 +63,7 @@ struct RootView: View {
 
                     Picker(selection: $controller.bundleIdentifier) {
                         if controller.installedApps.isEmpty {
-                            Text("No installed apps").tag("")
+                            Text(controller.selectedUDID.isEmpty ? "Select a simulator first" : "No installed apps").tag("")
                         }
                         ForEach(controller.installedApps) { app in
                             Text(app.displayName).tag(app.bundleIdentifier)
@@ -72,6 +72,19 @@ struct RootView: View {
                         Label("Target App", systemImage: "app.dashed")
                     }
                     .disabled(controller.installedApps.isEmpty)
+                } header: {
+                    HStack {
+                        Text("Destination")
+                        Spacer()
+                        Button("Refresh", systemImage: "arrow.clockwise") { controller.refresh() }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .help("Refresh simulators and installed apps")
+                    }
+                } footer: {
+                    if controller.devices.isEmpty {
+                        Text("Boot a simulator in Xcode, then tap Refresh.")
+                    }
                 }
 
                 Section {
@@ -98,10 +111,18 @@ struct RootView: View {
 
             ActionBar(controller: controller)
         }
-        .onAppear { syncSelfView() }
+        .onAppear {
+            controller.refresh()
+            syncSelfView()
+        }
         .onDisappear { selfView.stop() }
         .onChange(of: controller.sourceKind) { _, _ in syncSelfView() }
+        .onChange(of: controlActiveState) { _, state in
+            if state == .inactive { selfView.stop() } else { syncSelfView() }
+        }
     }
+
+    @Environment(\.controlActiveState) private var controlActiveState
 
     private func syncSelfView() {
         selfView.refreshAuthorization()
@@ -169,7 +190,7 @@ struct LiveBadge: View {
     var body: some View {
         HStack(spacing: 4) {
             Circle().fill(.red).frame(width: 6, height: 6)
-            Text("LIVE").font(.caption2.weight(.semibold))
+            Text("LIVE").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -245,38 +266,41 @@ struct SourceDetailRow: View {
 struct ActionBar: View {
     @ObservedObject var controller: SessionController
 
-    var body: some View {
-        GlassEffectContainer {
-            VStack(spacing: 10) {
-                HStack(spacing: 6) {
-                    if controller.isRunning {
-                        Circle().fill(.green).frame(width: 7, height: 7)
-                    } else if controller.isError {
-                        Circle().fill(.red).frame(width: 7, height: 7)
-                    }
-                    Text(controller.status)
-                        .font(.footnote)
-                        .foregroundStyle(controller.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                }
+    private var statusText: String {
+        if controller.isRunning || controller.isError { return controller.status }
+        return controller.startBlockReason ?? controller.status
+    }
 
-                Button {
-                    controller.isRunning ? controller.stop() : controller.start()
-                } label: {
-                    HStack(spacing: 6) {
-                        if controller.isBusy { ProgressView().controlSize(.small) }
-                        Text(controller.isRunning ? "Stop" : "Start").fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                if controller.isRunning {
+                    Circle().fill(.green).frame(width: 7, height: 7)
+                } else if controller.isError {
+                    Circle().fill(.red).frame(width: 7, height: 7)
                 }
-                .buttonStyle(.glass)
-                .tint(controller.isRunning ? .red : .accentColor)
-                .controlSize(.large)
-                .disabled(!controller.canStart && !controller.isRunning)
+                Text(statusText)
+                    .font(.footnote)
+                    .foregroundStyle(controller.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
             }
-            .padding(14)
+
+            Button {
+                controller.isRunning ? controller.stop() : controller.start()
+            } label: {
+                HStack(spacing: 6) {
+                    if controller.isBusy { ProgressView().controlSize(.small) }
+                    Text(controller.isRunning ? "Stop" : "Start").fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
+            .tint(controller.isRunning ? .red : .accentColor)
+            .controlSize(.large)
+            .disabled(!controller.canStart && !controller.isRunning)
         }
+        .padding(14)
     }
 }
