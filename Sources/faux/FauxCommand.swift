@@ -9,6 +9,7 @@ struct FauxCommand {
         static let auditFailed: Int32 = 1
         static let inspectionError: Int32 = 2
         static let serveFailed: Int32 = 3
+        static let runFailed: Int32 = 4
         static let usageError: Int32 = 64
     }
 
@@ -19,10 +20,19 @@ struct FauxCommand {
 
     private let doctor: DoctorService
     private let serverFactory: (String, String) throws -> FauxServer
+    private let deviceProvider: SimDeviceProviding
+    private let runSession: (RunArguments, SimDevice) throws -> Void
 
-    init(doctor: DoctorService, serverFactory: @escaping (String, String) throws -> FauxServer) {
+    init(
+        doctor: DoctorService,
+        serverFactory: @escaping (String, String) throws -> FauxServer,
+        deviceProvider: SimDeviceProviding,
+        runSession: @escaping (RunArguments, SimDevice) throws -> Void
+    ) {
         self.doctor = doctor
         self.serverFactory = serverFactory
+        self.deviceProvider = deviceProvider
+        self.runSession = runSession
     }
 
     func run(arguments: [String]) -> Int32 {
@@ -32,8 +42,47 @@ struct FauxCommand {
             return runDoctor(path: arguments.dropFirst().first ?? Self.defaultDylibPath)
         case "serve":
             return runServe(arguments: Array(arguments.dropFirst()))
+        case "list":
+            return runList()
+        case "run":
+            return runApp(arguments: Array(arguments.dropFirst()))
         default:
             return usage()
+        }
+    }
+
+    private func runList() -> Int32 {
+        do {
+            let devices = try deviceProvider.bootedDevices()
+            guard !devices.isEmpty else {
+                print("no booted simulators")
+                return ExitCode.passed
+            }
+            for device in devices {
+                print("\(device.name) — \(device.runtime) — \(device.udid)")
+            }
+            return ExitCode.passed
+        } catch {
+            writeError("faux list: FAIL — \(error)\n")
+            return ExitCode.runFailed
+        }
+    }
+
+    private func runApp(arguments: [String]) -> Int32 {
+        guard let parsed = RunArgumentsParser.parse(arguments, defaultSourceSpec: Self.defaultSourceSpec) else {
+            return usage()
+        }
+        do {
+            let devices = try deviceProvider.bootedDevices()
+            guard let device = DeviceResolver.resolve(devices, requestedUDID: parsed.deviceUDID) else {
+                writeError("faux run: FAIL — no \(parsed.deviceUDID.map { "simulator with udid \($0)" } ?? "booted simulator") found\n")
+                return ExitCode.runFailed
+            }
+            try runSession(parsed, device)
+            return ExitCode.passed
+        } catch {
+            writeError("faux run: FAIL — \(error)\n")
+            return ExitCode.runFailed
         }
     }
 
@@ -83,7 +132,13 @@ struct FauxCommand {
     }
 
     private func usage() -> Int32 {
-        print("usage: faux <doctor [path-to-dylib] | serve [socket-path] [--source image|video:<path>|webcam]>")
+        print("""
+        usage: faux <command>
+          doctor [path-to-dylib]
+          list
+          serve [socket-path] [--source image|video:<path>|webcam]
+          run [--device <udid>] [--source image|video:<path>|webcam] <bundle-id>
+        """)
         return ExitCode.usageError
     }
 
