@@ -33,6 +33,8 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 cp "$BINARY" "$STAGE/Contents/MacOS/FauxCam"
 cp "$ROOT/dist/libFaux.dylib" "$STAGE/Contents/Resources/libFaux.dylib"
+cp "$ROOT/Icons/FauxCam.icns" "$STAGE/Contents/Resources/FauxCam.icns"
+cp "$ROOT/Icons/MenuBarIcon.pdf" "$STAGE/Contents/Resources/MenuBarIcon.pdf"
 cat > "$STAGE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -42,6 +44,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>FauxCam</string>
   <key>CFBundleIdentifier</key><string>com.fauxcam.app</string>
   <key>CFBundleExecutable</key><string>FauxCam</string>
+  <key>CFBundleIconFile</key><string>FauxCam</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>

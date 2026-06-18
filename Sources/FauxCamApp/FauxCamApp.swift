@@ -19,11 +19,29 @@ struct FauxCamApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("FauxCam", systemImage: "camera.aperture") {
+        MenuBarExtra {
             RootView(controller: appDelegate.controller, selfView: appDelegate.selfView)
                 .frame(width: 360)
+        } label: {
+            Image(nsImage: Self.menuBarIcon)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    private static var menuBarIcon: NSImage {
+        let menuBarIconHeight = 18.0
+        if let iconURL = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf"),
+           let icon = NSImage(contentsOf: iconURL) {
+            icon.isTemplate = true
+            let aspectRatio = icon.size.width / icon.size.height
+            icon.size = NSSize(width: menuBarIconHeight * aspectRatio, height: menuBarIconHeight)
+            icon.accessibilityDescription = "FauxCam"
+            return icon
+        }
+        let fallback = NSImage(systemSymbolName: "camera.aperture", accessibilityDescription: "FauxCam")
+            ?? NSImage()
+        fallback.isTemplate = true
+        return fallback
     }
 }
 
