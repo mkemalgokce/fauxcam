@@ -57,8 +57,13 @@ static os_log_t fauxBufferLog(void) {
 // MARK: - Sample buffer construction
 
 - (nullable CMSampleBufferRef)newSampleBufferFromBGRABytes:(const uint8_t *)sourceBytes
-                                        sourceBytesPerRow:(size_t)sourceBytesPerRow {
+                                        sourceBytesPerRow:(size_t)sourceBytesPerRow
+                                             sourceLength:(size_t)sourceLength {
     if (!sourceBytes) return NULL;
+    if (sourceBytesPerRow == 0 || sourceBytesPerRow * (size_t)_height > sourceLength) {
+        os_log_error(fauxBufferLog(), "source too small w=%d h=%d stride=%zu length=%zu", _width, _height, sourceBytesPerRow, sourceLength);
+        return NULL;
+    }
 
     CVPixelBufferRef pixelBuffer = [self newFilledPixelBufferFromBGRABytes:sourceBytes
                                                         sourceBytesPerRow:sourceBytesPerRow];

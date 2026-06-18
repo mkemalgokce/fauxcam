@@ -48,6 +48,7 @@ static os_log_t fauxSessionLog(void) {
 
 @implementation FauxFramePump {
     dispatch_source_t _timer;
+    dispatch_queue_t _pumpQueue;
     FauxBufferFactory *_bufferFactory;
     uint8_t *_sourcePixels;
     size_t _sourceBytesPerRow;
@@ -63,12 +64,19 @@ static os_log_t fauxSessionLog(void) {
         os_log_error(fauxSessionLog(), "frame pump missing delegate or queue");
         return;
     }
+    if (_sourcePixels) { free(_sourcePixels); _sourcePixels = NULL; }
+    if (_frameClient) { faux_frame_client_destroy(_frameClient); _frameClient = NULL; }
+    _usesHostSocket = NO;
+
     _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:kFrameWidth height:kFrameHeight framesPerSecond:kFramesPerSecond];
     if (!_bufferFactory) return;
     [self buildSourcePixels];
     [self connectHostSocket];
 
-    _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.deliveryQueue);
+    if (!_pumpQueue) {
+        _pumpQueue = dispatch_queue_create("com.fauxcam.pump", DISPATCH_QUEUE_SERIAL);
+    }
+    _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _pumpQueue);
     uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)kFramesPerSecond;
     dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), interval, interval / 10);
     __weak FauxFramePump *weakSelf = self;
@@ -135,7 +143,9 @@ static os_log_t fauxSessionLog(void) {
     }
     CMSampleBufferRef sampleBuffer = NULL;
     if (received.payload) {
-        sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:received.payload sourceBytesPerRow:received.header.bytesPerRow];
+        sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:received.payload
+                                                 sourceBytesPerRow:received.header.bytesPerRow
+                                                      sourceLength:received.header.payloadLen];
     }
     faux_received_frame_free(&received);
     if (sampleBuffer) {
@@ -146,7 +156,9 @@ static os_log_t fauxSessionLog(void) {
 
 - (void)deliverSyntheticFrame {
     if (!_sourcePixels) return;
-    CMSampleBufferRef sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:_sourcePixels sourceBytesPerRow:_sourceBytesPerRow];
+    CMSampleBufferRef sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:_sourcePixels
+                                                               sourceBytesPerRow:_sourceBytesPerRow
+                                                                    sourceLength:_sourceBytesPerRow * (size_t)kFrameHeight];
     if (sampleBuffer) {
         [self deliverSampleBuffer:sampleBuffer];
         CFRelease(sampleBuffer);
@@ -155,11 +167,18 @@ static os_log_t fauxSessionLog(void) {
 
 - (void)deliverSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     id delegate = self.sampleBufferDelegate;
-    if (!delegate) return;
+    dispatch_queue_t queue = self.deliveryQueue;
+    if (!delegate || !queue) return;
     _sequence++;
-    ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
-        delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
-        self.captureOutput, sampleBuffer, self.captureConnection);
+    id output = self.captureOutput;
+    id connection = self.captureConnection;
+    CFRetain(sampleBuffer);
+    dispatch_async(queue, ^{
+        ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
+            delegate, @selector(captureOutput:didOutputSampleBuffer:fromConnection:),
+            output, sampleBuffer, connection);
+        CFRelease(sampleBuffer);
+    });
 }
 
 - (void)handleHostSocketFailure {
@@ -214,7 +233,7 @@ static id fauxInputInitWithDevice(id self, SEL _cmd, id device, NSError **error)
 }
 
 static void fauxSetSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
-    objc_setAssociatedObject(self, kOutputDelegateKey, delegate, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(self, kOutputDelegateKey, delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, kOutputQueueKey, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
@@ -238,6 +257,7 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
         pump.captureOutput = output;
         pump.sampleBufferDelegate = objc_getAssociatedObject(output, kOutputDelegateKey);
         pump.deliveryQueue = objc_getAssociatedObject(output, kOutputQueueKey);
+        objc_setAssociatedObject(output, kOutputDelegateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         return;
     }
     if (fauxOriginalAddOutput) {

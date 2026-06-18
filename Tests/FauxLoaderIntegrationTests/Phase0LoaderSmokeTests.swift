@@ -374,6 +374,7 @@ struct FrameDeliverySmoke {
         let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
         buildAndInstall(onto: deviceIdentifier)
         let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, injectingDylib: nil, untilContains: "frame setup failed")
+        #expect(captured.contains("frame setup failed"), Comment(rawValue: "baseline should report missing back device; captured:\n\(captured)"))
         #expect(!captured.contains("frame received"), Comment(rawValue: "baseline must deliver no frames; captured:\n\(captured)"))
     }
 
@@ -448,7 +449,11 @@ struct HostFedFrameDeliverySmoke {
         let coordinator = StreamCoordinator(source: ImageSource(solidColor: Self.serverColor), transport: transport)
         let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
         serverThread.start()
-        defer { transport.close() }
+        defer {
+            let waitDeadline = Date().addingTimeInterval(5)
+            while !serverThread.isFinished && Date() < waitDeadline { Thread.sleep(forTimeInterval: 0.05) }
+            transport.close()
+        }
 
         let captured = launchAndCapture(deviceIdentifier: deviceIdentifier, socketPath: socketPath, untilContains: Self.hostColorNeedle)
         #expect(captured.contains(Self.hostColorNeedle), Comment(rawValue: "expected host color \(Self.hostColorNeedle); captured:\n\(captured)"))

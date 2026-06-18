@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (nullable CMSampleBufferRef)newSampleBufferFromBGRABytes:(const uint8_t *)sourceBytes
                                         sourceBytesPerRow:(size_t)sourceBytesPerRow
+                                             sourceLength:(size_t)sourceLength
     CF_RETURNS_RETAINED;
 
 @property (nonatomic, readonly) int32_t width;

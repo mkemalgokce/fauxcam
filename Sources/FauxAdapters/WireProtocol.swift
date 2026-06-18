@@ -169,7 +169,7 @@ enum FrameWireCodec {
         let payloadLength = reader.readUInt32()
         guard reader.remaining >= Int(payloadLength) else { return nil }
         let payload = reader.readBytes(Int(payloadLength))
-        return Frame(
+        let frame = Frame(
             position: WirePosition(rawValue: position)?.cameraPosition ?? .back,
             pixelFormat: .bgra32,
             width: Int(width),
@@ -178,5 +178,6 @@ enum FrameWireCodec {
             presentationTimeNanoseconds: presentationTimeNanoseconds,
             pixels: payload
         )
+        return frame.isWellFormed ? frame : nil
     }
 }

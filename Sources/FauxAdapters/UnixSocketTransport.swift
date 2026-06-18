@@ -12,7 +12,11 @@ public enum FrameTransportError: Error, Equatable {
 }
 
 public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
+    private static let maxBodyBytes = 256 * 1024 * 1024
+    private static let maxDimension = 8192
+
     private let path: String
+    private let descriptorLock = NSLock()
     private var listenDescriptor: Int32 = -1
     private var clientDescriptor: Int32 = -1
     private var didReadHandshake = false
@@ -36,14 +40,23 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
         if !didReadHandshake {
             guard let helloHeader = try readHeader(), helloHeader.isValid,
                   helloHeader.type == WireMessageType.hello.rawValue,
-                  try readBody(count: Int(helloHeader.bodyLength)) != nil
+                  let helloCount = boundedBodyCount(helloHeader.bodyLength),
+                  try readBody(count: helloCount) != nil
             else { return nil }
             didReadHandshake = true
         }
         guard let header = try readHeader(), header.isValid else { return nil }
         guard header.type == WireMessageType.demand.rawValue else { return nil }
-        guard let body = try readBody(count: Int(header.bodyLength)) else { return nil }
-        return DemandWireCodec.decode(body)
+        guard let count = boundedBodyCount(header.bodyLength), let body = try readBody(count: count) else { return nil }
+        guard let demand = DemandWireCodec.decode(body),
+              demand.requestedWidth > 0, demand.requestedHeight > 0,
+              demand.requestedWidth <= Self.maxDimension, demand.requestedHeight <= Self.maxDimension
+        else { return nil }
+        return demand
+    }
+
+    private func boundedBodyCount(_ length: UInt32) -> Int? {
+        length <= UInt32(Self.maxBodyBytes) ? Int(length) : nil
     }
 
     public func deliver(_ frame: Frame) throws {
@@ -54,6 +67,8 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
     }
 
     public func close() {
+        descriptorLock.lock()
+        defer { descriptorLock.unlock() }
         if clientDescriptor >= 0 { Darwin.close(clientDescriptor); clientDescriptor = -1 }
         if listenDescriptor >= 0 { Darwin.close(listenDescriptor); listenDescriptor = -1 }
         unlink(path)

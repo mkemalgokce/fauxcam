@@ -2,6 +2,7 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -68,6 +69,9 @@ int faux_frame_client_connect(faux_frame_client *client, const char *path) {
     }
     int suppressSignalPipe = 1;
     setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, sizeof(suppressSignalPipe));
+    struct timeval timeout = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     client->descriptor = descriptor;
     return 0;
 }
@@ -120,6 +124,9 @@ int faux_frame_client_recv_frame(faux_frame_client *client, faux_received_frame 
     uint32_t payloadLength = body.payloadLen;
     if ((size_t)payloadLength + sizeof(faux_frame_body) != header.bodyLen) return -1;
     if (payloadLength > kFauxMaxPayloadBytes) return -1;
+    if (body.width == 0 || body.height == 0) return -1;
+    if ((uint64_t)body.bytesPerRow < (uint64_t)body.width * 4) return -1;
+    if ((uint64_t)body.bytesPerRow * (uint64_t)body.height > (uint64_t)payloadLength) return -1;
 
     uint8_t *payload = NULL;
     if (payloadLength > 0) {
