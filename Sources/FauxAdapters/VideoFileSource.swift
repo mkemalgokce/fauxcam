@@ -26,6 +26,10 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
     private var trackOutput: AVAssetReaderTrackOutput?
     private var hasLoggedFailure = false
     private var permanentlyFailed = false
+    private var lastSample: CMSampleBuffer?
+    private var lastDecodeRealtimeNanoseconds: UInt64 = 0
+    private var cachedNaturalAspect: Double = 16.0 / 9.0
+    private static let reuseWindowNanoseconds: UInt64 = 25_000_000
 
     private let crop: @Sendable () -> CropRegion
 
@@ -35,11 +39,12 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
         self.clock = clock
     }
 
+    public var naturalAspect: Double { cachedNaturalAspect }
+
     public func frame(satisfying demand: Demand) throws -> Frame {
         if permanentlyFailed { return blackFrame(for: demand, clock: clock) }
         do {
-            let sampleBuffer = try nextSampleBuffer()
-            guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+            guard let imageBuffer = try currentImageBuffer(),
                   let frame = scaler.frame(
                       from: imageBuffer,
                       region: crop(),
@@ -61,6 +66,23 @@ public final class VideoFileSource: FrameSource, @unchecked Sendable {
             trackOutput = nil
             return blackFrame(for: demand, clock: clock)
         }
+    }
+
+    /// Returns the current video frame, reusing the just-decoded sample within a short real-time
+    /// window so the two preview pulls per tick (natural + device aspect) don't advance the video
+    /// twice. Also records the frame's aspect for the natural-shape preview.
+    private func currentImageBuffer() throws -> CVImageBuffer? {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if let last = lastSample, now &- lastDecodeRealtimeNanoseconds < Self.reuseWindowNanoseconds {
+            return CMSampleBufferGetImageBuffer(last)
+        }
+        let sample = try nextSampleBuffer()
+        lastSample = sample
+        lastDecodeRealtimeNanoseconds = now
+        guard let buffer = CMSampleBufferGetImageBuffer(sample) else { return nil }
+        let height = CVPixelBufferGetHeight(buffer)
+        if height > 0 { cachedNaturalAspect = Double(CVPixelBufferGetWidth(buffer)) / Double(height) }
+        return buffer
     }
 
     private func nextSampleBuffer() throws -> CMSampleBuffer {

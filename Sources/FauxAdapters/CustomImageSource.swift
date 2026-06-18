@@ -34,6 +34,11 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
         self.clock = clock
     }
 
+    public var naturalAspect: Double {
+        let extent = sourceImage.extent
+        return extent.height > 0 ? Double(extent.width / extent.height) : 16.0 / 9.0
+    }
+
     public func frame(satisfying demand: Demand) throws -> Frame {
         let crop = self.crop()
         cacheLock.lock()

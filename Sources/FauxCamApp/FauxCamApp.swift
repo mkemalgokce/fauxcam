@@ -102,7 +102,7 @@ struct RootView: View {
 
     private func reconfigurePreview() {
         preview.setCrop(controller.region)
-        preview.configure(descriptor: controller.sourceDescriptor, aspect: controller.outputAspect)
+        preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
     // MARK: Destination
@@ -256,8 +256,8 @@ struct ViewfinderCard: View {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
             if needsCameraPermission {
                 permissionContent
-            } else if let image = preview.image {
-                Image(nsImage: image).resizable().scaledToFit()
+            } else if let image = preview.sourceImage {
+                Image(nsImage: image).resizable().scaledToFill()
             } else {
                 ProgressView()
             }
@@ -280,8 +280,8 @@ struct ViewfinderCard: View {
         .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
-                if let image = preview.image {
-                    Image(nsImage: image).resizable().scaledToFit()
+                if let image = preview.deviceImage {
+                    Image(nsImage: image).resizable().scaledToFill()
                 } else {
                     Color.black
                 }

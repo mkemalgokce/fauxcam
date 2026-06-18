@@ -17,6 +17,8 @@ public final class QRCodeSource: FrameSource, @unchecked Sendable {
         self.clock = clock
     }
 
+    public var naturalAspect: Double { 1.0 }
+
     public func frame(satisfying demand: Demand) throws -> Frame {
         let region = crop()
         if region == .identity {

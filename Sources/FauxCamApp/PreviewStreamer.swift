@@ -18,30 +18,24 @@ private final class CropHolder: @unchecked Sendable {
 
 @MainActor
 final class PreviewStreamer: ObservableObject {
-    @Published private(set) var image: NSImage?
+    /// The source at its OWN aspect (the main viewfinder), and at the SELECTED DEVICE's aspect — the
+    /// exact frame the simulator gets (the device PiP). Both come from the one frame pipeline, so the
+    /// UI never knows the source kind.
+    @Published private(set) var sourceImage: NSImage?
+    @Published private(set) var deviceImage: NSImage?
 
     private let factory = FrameSourceFactory()
     private let cropHolder = CropHolder()
     private var source: FrameSource?
     private var descriptor: SourceDescriptor?
-    private var demandWidth = 480
-    private var demandHeight = 270
+    private var deviceAspect: Double = 9.0 / 19.5
     private var timer: Timer?
     private var pulling = false
 
     func setCrop(_ region: CropRegion) { cropHolder.value = region }
 
-    /// `aspect` is the SELECTED DEVICE's screen aspect: the preview is rendered exactly as the
-    /// simulator will receive it (source fit into the device frame, black bars, zoom filling the
-    /// device height), so the in-app preview and the device PiP match the real simulator.
-    func configure(descriptor: SourceDescriptor, aspect: Double) {
-        let longSide = 480.0
-        let safeAspect = aspect > 0 ? aspect : 9.0 / 19.5
-        if safeAspect >= 1 {
-            demandWidth = even(longSide); demandHeight = even(longSide / safeAspect)
-        } else {
-            demandHeight = even(longSide); demandWidth = even(longSide * safeAspect)
-        }
+    func configure(descriptor: SourceDescriptor, deviceAspect: Double) {
+        self.deviceAspect = deviceAspect > 0 ? deviceAspect : 9.0 / 19.5
         if descriptor != self.descriptor || source == nil {
             self.descriptor = descriptor
             rebuild()
@@ -52,7 +46,8 @@ final class PreviewStreamer: ObservableObject {
     func rebuild() {
         guard let descriptor else { return }
         source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
-        image = nil
+        sourceImage = nil
+        deviceImage = nil
     }
 
     func start() {
@@ -69,20 +64,38 @@ final class PreviewStreamer: ObservableObject {
         timer = nil
         source = nil
         descriptor = nil
-        image = nil
+        sourceImage = nil
+        deviceImage = nil
     }
 
     private func tick() {
         guard let source, !pulling else { return }
         pulling = true
-        let width = demandWidth, height = demandHeight
+        let naturalDemand = demand(forAspect: source.naturalAspect)
+        let deviceDemand = demand(forAspect: deviceAspect)
         Task.detached(priority: .userInitiated) {
-            let frame = try? source.frame(satisfying: Demand(position: .back, requestedWidth: width, requestedHeight: height))
+            // Natural first: for video it decodes the frame; the device pull then reuses that same
+            // frame (within the source's reuse window) so the video doesn't advance twice per tick.
+            let naturalFrame = try? source.frame(satisfying: naturalDemand)
+            let deviceFrame = try? source.frame(satisfying: deviceDemand)
             await MainActor.run {
                 self.pulling = false
-                if let frame { self.image = PreviewStreamer.image(from: frame) }
+                if let naturalFrame { self.sourceImage = PreviewStreamer.image(from: naturalFrame) }
+                if let deviceFrame { self.deviceImage = PreviewStreamer.image(from: deviceFrame) }
             }
         }
+    }
+
+    private func demand(forAspect aspect: Double) -> Demand {
+        let longSide = 480.0
+        let safeAspect = aspect > 0 ? aspect : 16.0 / 9.0
+        let width: Int, height: Int
+        if safeAspect >= 1 {
+            width = even(longSide); height = even(longSide / safeAspect)
+        } else {
+            height = even(longSide); width = even(longSide * safeAspect)
+        }
+        return Demand(position: .back, requestedWidth: width, requestedHeight: height)
     }
 
     private func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
