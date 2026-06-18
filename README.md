@@ -58,12 +58,14 @@ are scaled (aspect-fill) to the configured size.
 
 ## Supported apps
 
-The target app must open the camera through **AVFoundation**. Both common paths work:
+The target app must open the camera through **AVFoundation**. These paths work:
 
-- `AVCaptureSession` + `AVCaptureVideoDataOutput` (a frame-delegate) — frames arrive in `captureOutput:didOutputSampleBuffer:fromConnection:`.
-- `AVCaptureVideoPreviewLayer` (live preview, no data output) — FauxCam overlays an `AVSampleBufferDisplayLayer` on the app's preview layer and drives it, so the preview shows the source.
+- `AVCaptureVideoDataOutput` (a frame-delegate) — frames arrive in `captureOutput:didOutputSampleBuffer:fromConnection:`.
+- `AVCaptureVideoPreviewLayer` (live preview, no data output) — FauxCam overlays an `AVSampleBufferDisplayLayer` on the app's preview layer; a front-camera preview is mirrored, matching native.
+- `AVCapturePhotoOutput` (still photo capture) — `capturePhoto(with:delegate:)` delivers an `AVCapturePhoto` whose `fileDataRepresentation()` is a JPEG of the current frame.
+- `AVCaptureMetadataOutput` (QR/barcode scanners) — FauxCam runs a detector over the frames and hands the delegate an `AVMetadataMachineReadableCodeObject` (works for any source whose frames contain a QR, e.g. `--source qr:<text>` or a video showing one).
 
-Not yet supported: `AVCapturePhotoOutput` (still photo capture), `AVCaptureMetadataOutput` (metadata-only QR/barcode scanners), and `UIImagePickerController(sourceType: .camera)` (the high-level system camera UI, which the Simulator reports as unavailable).
+Not supported: `AVCaptureMovieFileOutput` (video recording) and `UIImagePickerController(sourceType: .camera)` (the high-level system camera UI, which the Simulator reports as unavailable).
 
 ## Menubar app
 
