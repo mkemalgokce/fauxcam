@@ -11,6 +11,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appIcons = AppIconStore()
     let autoMode = AutoModeController()
     let settings = AppSettings()
+    private var settingsWindow: NSWindow?
+
+    /// A SwiftUI `Settings` scene won't surface from a menu-bar-only app, so host the settings UI in a
+    /// plain NSWindow we own and show on demand.
+    func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false
+            )
+            window.title = "FauxCam Settings"
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView:
+                SettingsView(settings: settings, autoMode: autoMode, controller: controller))
+            window.center()
+            settingsWindow = window
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         controller.stopSynchronously()
@@ -27,16 +47,13 @@ struct FauxCamApp: App {
         MenuBarExtra {
             RootView(controller: appDelegate.controller, camera: appDelegate.camera,
                      preview: appDelegate.preview, appIcons: appDelegate.appIcons,
-                     autoMode: appDelegate.autoMode, settings: appDelegate.settings)
+                     autoMode: appDelegate.autoMode, settings: appDelegate.settings,
+                     onOpenSettings: { appDelegate.showSettings() })
                 .frame(width: 360)
         } label: {
             Image(nsImage: Self.menuBarIcon)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView(settings: appDelegate.settings, autoMode: appDelegate.autoMode, controller: appDelegate.controller)
-        }
     }
 
     private static var menuBarIcon: NSImage {
@@ -64,6 +81,7 @@ struct RootView: View {
     @ObservedObject var appIcons: AppIconStore
     @ObservedObject var autoMode: AutoModeController
     @ObservedObject var settings: AppSettings
+    let onOpenSettings: () -> Void
     @State private var confirmingAutoMode = false
     @State private var didCleanLeftover = false
     @Environment(\.controlActiveState) private var controlActiveState
@@ -141,7 +159,7 @@ struct RootView: View {
 
     private var footer: some View {
         HStack {
-            Button { openSettings() } label: { Label("Settings", systemImage: "gearshape") }
+            Button { onOpenSettings() } label: { Label("Settings", systemImage: "gearshape") }
                 .buttonStyle(.borderless).controlSize(.small)
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -149,12 +167,6 @@ struct RootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 10)
-    }
-
-    /// A menu-bar-only app must activate itself before the Settings window will come to the front.
-    private func openSettings() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func sourceChanged() {
