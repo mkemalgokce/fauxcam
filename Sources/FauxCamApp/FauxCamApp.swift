@@ -8,7 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = SessionController()
     let camera = CameraAuthorization()
     let preview = PreviewStreamer()
-    let appIcons = AppIconStore()
     let autoMode = AutoModeController()
     let settings = AppSettings()
     private var settingsWindow: NSWindow?
@@ -18,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false
             )
             window.title = "FauxCam Settings"
@@ -33,7 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        controller.stopSynchronously()
         preview.stop()
         autoMode.cleanupForQuit()
     }
@@ -46,7 +44,7 @@ struct FauxCamApp: App {
     var body: some Scene {
         MenuBarExtra {
             RootView(controller: appDelegate.controller, camera: appDelegate.camera,
-                     preview: appDelegate.preview, appIcons: appDelegate.appIcons,
+                     preview: appDelegate.preview,
                      autoMode: appDelegate.autoMode, settings: appDelegate.settings,
                      onOpenSettings: { appDelegate.showSettings() })
                 .frame(width: 360)
@@ -78,12 +76,12 @@ struct RootView: View {
     @ObservedObject var controller: SessionController
     @ObservedObject var camera: CameraAuthorization
     @ObservedObject var preview: PreviewStreamer
-    @ObservedObject var appIcons: AppIconStore
     @ObservedObject var autoMode: AutoModeController
     @ObservedObject var settings: AppSettings
     let onOpenSettings: () -> Void
     @State private var confirmingAutoMode = false
     @State private var didCleanLeftover = false
+    @State private var didAutoEnable = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     private var simulatorSelection: Binding<String?> {
@@ -104,12 +102,16 @@ struct RootView: View {
         .onAppear {
             controller.refresh()
             camera.refresh()
-            appIcons.load(controller.installedApps, on: controller.selectedUDID)
         }
         .onChange(of: controller.devices) { _, devices in
             let udids = devices.map(\.udid)
             autoMode.syncDevices(udids)
             if !didCleanLeftover { autoMode.cleanLeftoverInjection(deviceUDIDs: udids); didCleanLeftover = true }
+            if settings.autoEnableOnLaunch, !didAutoEnable, !autoMode.isActive, !udids.isEmpty {
+                didAutoEnable = true
+                autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region,
+                                deviceUDIDs: udids, width: settings.autoWidth, height: settings.autoHeight, fps: settings.autoFps)
+            }
         }
     }
 
@@ -120,25 +122,21 @@ struct RootView: View {
                 .padding(.top, 16)
 
             VStack(spacing: 12) {
-                destinationSection
+                simulatorSection
                 sourceSection
-                autoModeSection
             }
             .padding(.horizontal, 16)
 
-            ActionBar(controller: controller)
+            autoInjectBar
             footer
         }
         .alert("Enable auto-inject?", isPresented: $confirmingAutoMode) {
             Button("Enable") { autoMode.enable(descriptor: controller.sourceDescriptor, crop: controller.region, deviceUDIDs: controller.devices.map(\.udid), width: settings.autoWidth, height: settings.autoHeight, fps: settings.autoFps) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("FauxCam sets a launchd variable in your booted simulators so every app you launch — tapped open or run from Xcode — loads the fake camera, no Start needed. It touches no files on your Mac, is unset when you turn this off or quit FauxCam, and clears on simulator reboot. Relaunch already-running apps to apply.")
+            Text("FauxCam sets a launchd variable in your booted simulators so every app you launch — tapped open or run from Xcode — loads the fake camera. It touches no files on your Mac, is unset when you turn this off or quit FauxCam, and clears on simulator reboot. Relaunch already-running apps to apply.")
         }
         .onAppear {
-            controller.refresh()
-            camera.refresh()
-            appIcons.load(controller.installedApps, on: controller.selectedUDID)
             reconfigurePreview()
             preview.start()
         }
@@ -150,8 +148,6 @@ struct RootView: View {
         .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
         .onChange(of: camera.status) { _, _ in preview.rebuild() }
-        .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
-        .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
@@ -171,32 +167,41 @@ struct RootView: View {
 
     private func sourceChanged() {
         reconfigurePreview()
-        controller.applyLiveSource()
         autoMode.setSourceDescriptor(controller.sourceDescriptor)
     }
 
-    private var autoModeSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Auto-inject all simulators", systemImage: "bolt.badge.automatic")
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { autoMode.isActive },
-                        set: { $0 ? (confirmingAutoMode = true) : autoMode.disable() }
-                    ))
-                    .labelsHidden().toggleStyle(.switch)
+    // MARK: Auto-inject (the primary action)
+
+    private var autoInjectBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if autoMode.isActive {
+                    Circle().fill(.green).frame(width: 8, height: 8)
+                    Text("Auto-inject is on").font(.footnote.weight(.medium))
+                } else {
+                    Text(controller.devices.isEmpty ? "Boot a simulator to begin" : "Every app in your simulators gets the camera")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Text(autoMode.isActive
-                     ? "On — every app you open (tapped or from Xcode) gets the camera. Relaunch running apps to apply."
-                     : "Inject into every app in your booted simulators — tapped or Xcode-run, no Start. No host files; removed on quit.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let error = autoMode.lastError {
-                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
-                }
+                Spacer()
             }
+            if let error = autoMode.lastError {
+                HStack { Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2); Spacer() }
+            }
+            Button {
+                autoMode.isActive ? autoMode.disable() : (confirmingAutoMode = true)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: autoMode.isActive ? "bolt.slash.fill" : "bolt.fill")
+                    Text(autoMode.isActive ? "Turn Off Auto-inject" : "Start Auto-inject").fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .tint(autoMode.isActive ? .secondary : .accentColor)
+            .disabled(!autoMode.isActive && controller.devices.isEmpty)
         }
+        .padding(.horizontal, 14)
     }
 
     private func reconfigurePreview() {
@@ -204,64 +209,26 @@ struct RootView: View {
         preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
     }
 
-    // MARK: Destination
+    // MARK: Simulator (drives the preview + bezel aspect)
 
-    private var destinationSection: some View {
+    private var simulatorSection: some View {
         GroupBox {
-            VStack(spacing: 10) {
-                HStack {
-                    Label("Simulator", systemImage: "iphone.gen3")
-                    Spacer()
-                    Picker("Simulator", selection: simulatorSelection) {
-                        if controller.devices.isEmpty { Text("None booted").tag(String?.none) }
-                        ForEach(controller.devices, id: \.udid) { device in
-                            Text(device.name).tag(String?.some(device.udid))
-                        }
+            HStack {
+                Label("Simulator", systemImage: "iphone.gen3")
+                Spacer()
+                Picker("Simulator", selection: simulatorSelection) {
+                    if controller.devices.isEmpty { Text("None booted").tag(String?.none) }
+                    ForEach(controller.devices, id: \.udid) { device in
+                        Text(device.name).tag(String?.some(device.udid))
                     }
-                    .labelsHidden().frame(width: 164)
-                    .disabled(controller.devices.isEmpty)
-                    Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless)
-                        .help("Refresh simulators and installed apps")
                 }
-                Divider()
-                HStack {
-                    Label("Target App", systemImage: "app.dashed")
-                    Spacer()
-                    Menu {
-                        ForEach(controller.installedApps) { app in
-                            Button { controller.bundleIdentifier = app.bundleIdentifier } label: {
-                                if let icon = appIcons.icon(bundleIdentifier: app.bundleIdentifier, on: controller.selectedUDID) {
-                                    Image(nsImage: icon)
-                                }
-                                Text(app.displayName)
-                            }
-                        }
-                    } label: {
-                        targetAppLabel
-                    }
-                    .menuStyle(.button).frame(width: 196)
-                    .disabled(controller.installedApps.isEmpty)
-                }
+                .labelsHidden().frame(width: 184)
+                .disabled(controller.devices.isEmpty)
+                Button { controller.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+                    .help("Refresh booted simulators")
             }
         }
-    }
-
-    private var targetAppLabel: some View {
-        HStack(spacing: 6) {
-            AppIconThumbnail(icon: controller.selectedApp.flatMap {
-                appIcons.icon(bundleIdentifier: $0.bundleIdentifier, on: controller.selectedUDID)
-            }, side: AppIconStore.iconPointSize)
-            Text(targetAppLabelText).lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    private var targetAppLabelText: String {
-        if let app = controller.selectedApp { return app.displayName }
-        if controller.selectedUDID.isEmpty { return "Select a simulator" }
-        return controller.installedApps.isEmpty ? "No user apps" : "Select an app"
     }
 
     // MARK: Source
@@ -287,26 +254,6 @@ struct RootView: View {
     }
 
     // MARK: Zoom
-}
-
-// MARK: - App icon
-
-struct AppIconThumbnail: View {
-    let icon: NSImage?
-    var side: CGFloat = 18
-    var body: some View {
-        Group {
-            if let icon {
-                Image(nsImage: icon).resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: side, height: side)
-                    .clipShape(RoundedRectangle(cornerRadius: side * 0.225, style: .continuous))
-            } else {
-                RoundedRectangle(cornerRadius: side * 0.225, style: .continuous)
-                    .fill(.quaternary).frame(width: side, height: side)
-                    .overlay(Image(systemName: "app.dashed").font(.system(size: side * 0.6)).foregroundStyle(.secondary))
-            }
-        }
-    }
 }
 
 // MARK: - Viewfinder (renders frames only — source-agnostic)
@@ -341,25 +288,9 @@ struct ViewfinderCard: View {
                     .gesture(panGesture)
             }
         }
-        .overlay(alignment: .topLeading) {
-            if controller.isRunning {
-                LiveBadge().padding(10).transition(.opacity)
-                    .help("Streaming frames to the app. Press Stop to tear down.")
-            }
-        }
         .overlay(alignment: .topTrailing) {
             if controller.sourceKind.supportsFraming && !needsCameraPermission {
                 zoomBadge.padding(10)
-            }
-        }
-        .overlay(alignment: .top) {
-            if controller.aspectChangedWhileRunning {
-                Button { controller.restart() } label: {
-                    Label("Apply \(controller.outputSize.width)×\(controller.outputSize.height)", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.borderedProminent).controlSize(.small).padding(10)
-                .help("Relaunch at the new device size")
             }
         }
         .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
@@ -374,7 +305,6 @@ struct ViewfinderCard: View {
             .padding(10)
             .help("How the frame maps onto the selected device — the source fit to the screen")
         }
-        .animation(.easeInOut(duration: 0.2), value: controller.isRunning)
     }
 
     private var permissionContent: some View {
@@ -482,17 +412,6 @@ struct DeviceFramePiP<Content: View>: View {
     }
 }
 
-struct LiveBadge: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(.secondary).frame(width: 6, height: 6)
-            Text("LIVE").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .glassEffect(.regular, in: .capsule)
-    }
-}
-
 // MARK: - Source detail
 
 struct SourceDetailRow: View {
@@ -521,46 +440,3 @@ struct SourceDetailRow: View {
     }
 }
 
-// MARK: - Action bar
-
-struct ActionBar: View {
-    @ObservedObject var controller: SessionController
-
-    private var statusText: String {
-        if controller.isRunning || controller.isError { return controller.status }
-        return controller.startBlockReason ?? controller.status
-    }
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Text(statusText)
-                    .font(.footnote)
-                    .foregroundStyle(controller.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-            }
-
-            Button {
-                controller.isRunning ? controller.stop() : controller.start()
-            } label: {
-                HStack(spacing: 6) {
-                    if controller.isBusy {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: controller.isRunning ? "stop.fill" : "play.fill")
-                    }
-                    Text(controller.isRunning ? "Stop" : "Start").fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .controlSize(.large)
-            .disabled(!controller.canStart && !controller.isRunning)
-            .help(controller.isRunning
-                  ? "Stop streaming and tear down."
-                  : "Relaunches the target app to inject FauxCam as its camera.")
-        }
-        .padding(14)
-    }
-}
