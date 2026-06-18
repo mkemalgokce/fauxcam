@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "FauxCore",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     products: [
         .executable(name: "faux", targets: ["faux"]),
         .executable(name: "FauxCamApp", targets: ["FauxCamApp"])

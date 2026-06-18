@@ -9,9 +9,32 @@ final class SessionController: ObservableObject {
     enum SourceKind: String, CaseIterable, Identifiable {
         case image, webcam, video, qr
         var id: String { rawValue }
-        var title: String { rawValue.uppercased() }
+        var title: String {
+            switch self {
+            case .image: return "Test Image"
+            case .webcam: return "Mac Camera"
+            case .video: return "Video File"
+            case .qr: return "QR Code"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .image: return "photo"
+            case .webcam: return "web.camera"
+            case .video: return "film"
+            case .qr: return "qrcode"
+            }
+        }
         var needsDetail: Bool { self == .video || self == .qr }
-        var detailPrompt: String { self == .video ? "/path/to/clip.mov" : "text to encode" }
+        var detailPrompt: String { self == .video ? "/path/to/clip.mov" : "Text to encode" }
+        var footerHint: String {
+            switch self {
+            case .image: return "A built-in test image is shown to the app's camera."
+            case .webcam: return "Your Mac camera is mirrored into the app's camera."
+            case .video: return "The chosen video file plays as the app's camera."
+            case .qr: return "A QR code is generated from your text and shown to the camera."
+            }
+        }
     }
 
     @Published var devices: [SimDevice] = []
