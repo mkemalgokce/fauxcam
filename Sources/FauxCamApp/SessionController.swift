@@ -80,11 +80,6 @@ final class SessionController: ObservableObject {
 
     var aspectChangedWhileRunning: Bool { isRunning && abs(outputAspect - appliedAspect) > 0.001 }
 
-    /// Keeps the live region's aspect equal to the device aspect (so the crop box matches the screen).
-    func syncRegionAspect() {
-        region = CropRegion(centerX: region.centerX, centerY: region.centerY, zoom: region.zoom, aspect: outputAspect)
-    }
-
     private func loadPreviewImage() {
         let path = imagePath
         guard !path.isEmpty else { previewImage = nil; return }
@@ -188,7 +183,6 @@ final class SessionController: ObservableObject {
                 self.aspectInFlight = false
                 guard udid == self.selectedUDID, let aspect else { return }
                 self.deviceAspect = aspect
-                if !self.isRunning { self.syncRegionAspect() }
             }
         }
     }
@@ -249,7 +243,6 @@ final class SessionController: ObservableObject {
         let sourceLabel = sourceKind.title
         let bundle = bundleIdentifier
         let startAspect = outputAspect
-        syncRegionAspect()
         let size = outputSize
         let configuration = FauxRunSession.Configuration(
             dylibPath: dylibPath, socketPath: socketPath,

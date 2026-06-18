@@ -102,7 +102,7 @@ struct RootView: View {
 
     private func reconfigurePreview() {
         preview.setCrop(controller.region)
-        preview.configure(descriptor: controller.sourceDescriptor, aspect: controller.outputAspect)
+        preview.configure(descriptor: controller.sourceDescriptor)
     }
 
     // MARK: Destination
@@ -200,7 +200,7 @@ struct RootView: View {
                     Text(magnificationText)
                         .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
                     if controller.region.zoom != 1 || !controller.region.isCentered {
-                        Button { controller.region = CropRegion(aspect: controller.region.aspect) } label: {
+                        Button { controller.region = CropRegion() } label: {
                             Image(systemName: "arrow.counterclockwise")
                         }
                         .buttonStyle(.borderless).help("Reset framing")
@@ -215,7 +215,7 @@ struct RootView: View {
     }
 
     private var magnificationText: String {
-        String(format: "%.1f×", 1.0 / max(controller.region.zoom, 0.0001))
+        String(format: "%.1f×", controller.region.zoom)
     }
 }
 
@@ -281,13 +281,13 @@ struct ViewfinderCard: View {
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
                 if let image = preview.image {
-                    Image(nsImage: image).resizable().scaledToFill()
+                    Image(nsImage: image).resizable().scaledToFit()
                 } else {
                     Color.black
                 }
             }
             .padding(10)
-            .help("How the frame maps onto the selected device")
+            .help("How the frame maps onto the selected device — the source fit to the screen")
         }
         .animation(.easeInOut(duration: 0.2), value: controller.isRunning)
     }
@@ -311,7 +311,7 @@ struct ViewfinderCard: View {
     private func applyZoom(_ factor: Double) {
         guard factor > 0 else { return }
         controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY,
-                                       zoom: controller.region.zoom / factor, aspect: controller.region.aspect)
+                                       zoom: controller.region.zoom * factor)
     }
 
     private var panGesture: some Gesture {
@@ -319,10 +319,11 @@ struct ViewfinderCard: View {
             .onChanged { value in
                 let start = dragStart ?? (controller.region.centerX, controller.region.centerY)
                 if dragStart == nil { dragStart = start }
-                let dx = Double(value.translation.width) / 328.0 * controller.region.zoom
-                let dy = Double(value.translation.height) / 188.0 * controller.region.zoom
+                let zoom = max(controller.region.zoom, 0.1)
+                let dx = Double(value.translation.width) / 328.0 / zoom
+                let dy = Double(value.translation.height) / 188.0 / zoom
                 controller.region = CropRegion(centerX: start.x - dx, centerY: start.y - dy,
-                                               zoom: controller.region.zoom, aspect: controller.region.aspect)
+                                               zoom: controller.region.zoom)
             }
             .onEnded { _ in dragStart = nil }
     }

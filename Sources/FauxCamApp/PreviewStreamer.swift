@@ -31,23 +31,26 @@ final class PreviewStreamer: ObservableObject {
 
     func setCrop(_ region: CropRegion) { cropHolder.value = region }
 
-    func configure(descriptor: SourceDescriptor, aspect: Double) {
-        let longSide = 480.0
-        if aspect >= 1 {
-            demandWidth = even(longSide); demandHeight = even(longSide / max(aspect, 0.01))
-        } else {
-            demandHeight = even(longSide); demandWidth = even(longSide * aspect)
-        }
+    func configure(descriptor: SourceDescriptor) {
         if descriptor != self.descriptor || source == nil {
             self.descriptor = descriptor
             rebuild()
         }
     }
 
-    /// Rebuilds the source (e.g. after camera permission is granted so the webcam source can open).
+    /// Rebuilds the source (e.g. after camera permission is granted so the webcam source can open)
+    /// and sizes the preview demand to the source's NATURAL aspect, so the preview shows it undistorted.
     func rebuild() {
         guard let descriptor else { return }
-        source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
+        let source = factory.make(descriptor, crop: { [cropHolder] in cropHolder.value })
+        self.source = source
+        let longSide = 480.0
+        let aspect = source.naturalAspect > 0 ? source.naturalAspect : 16.0 / 9.0
+        if aspect >= 1 {
+            demandWidth = even(longSide); demandHeight = even(longSide / aspect)
+        } else {
+            demandHeight = even(longSide); demandWidth = even(longSide * aspect)
+        }
         image = nil
     }
 
