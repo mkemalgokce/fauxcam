@@ -82,6 +82,21 @@ enum SimulatorFixtureHarness {
     private static let warmupSeconds: TimeInterval = 2
     private static let pollIntervalSeconds: TimeInterval = 0.25
 
+    /// Serves frames from `source` over `socketPath` for the duration of `body`, then tears the
+    /// background server down (joining the pump thread) so the next test starts clean.
+    static func withHostServer<Result>(socketPath: String, source: FrameSource, _ body: () -> Result) throws -> Result {
+        let transport = try UnixSocketTransport(listeningAt: socketPath)
+        let coordinator = StreamCoordinator(source: source, transport: transport)
+        let serverThread = Thread { try? coordinator.pumpUntilDisconnect() }
+        serverThread.start()
+        defer {
+            let deadline = Date().addingTimeInterval(5)
+            while !serverThread.isFinished && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+            transport.close()
+        }
+        return body()
+    }
+
     static func buildAndInstall(onto deviceIdentifier: String) {
         let dylibBuild = Shell.runCapturing(executablePath: "/bin/bash", arguments: [RepositoryLayout.buildDylibScript.path], currentDirectory: RepositoryLayout.root)
         #expect(dylibBuild.succeeded, Comment(rawValue: dylibBuild.combinedOutput))
@@ -452,6 +467,78 @@ struct PreviewLayerSmoke {
             untilContains: Self.deliveredNeedle, deadlineSeconds: Self.deadlineSeconds)
         #expect(captured.contains(Self.registeredNeedle), Comment(rawValue: "expected preview layer registration; captured:\n\(captured)"))
         #expect(captured.contains(Self.deliveredNeedle), Comment(rawValue: "expected a frame enqueued to the preview layer; captured:\n\(captured)"))
+    }
+
+    @Test("injected guest mirrors a front-camera preview")
+    func injectedGuestMirrorsFrontCameraPreview() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        SimulatorFixtureHarness.buildAndInstall(onto: deviceIdentifier)
+        let captured = SimulatorFixtureHarness.launchAndCapture(
+            deviceIdentifier: deviceIdentifier, bundleIdentifier: Self.fixtureBundleIdentifier,
+            logCategory: "session",
+            childEnvironment: [
+                "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES": RepositoryLayout.distributedDylib.path,
+                "SIMCTL_CHILD_FAUXCAM_PREVIEW_PROBE": "1",
+                "SIMCTL_CHILD_FAUXCAM_FRONT": "1"
+            ],
+            untilContains: "mirrored=1", deadlineSeconds: Self.deadlineSeconds)
+        #expect(captured.contains("mirrored=1"), Comment(rawValue: "expected a mirrored front preview; captured:\n\(captured)"))
+    }
+}
+
+// MARK: - Phase 7: metadata + photo outputs
+
+@Suite("Phase 7: metadata scanner delivery", .enabled(if: BootedSimulatorGate.isSatisfied, Comment(rawValue: BootedSimulatorGate.skipReason)))
+struct MetadataScannerSmoke {
+    private static let fixtureBundleIdentifier =
+        ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
+    private static let payload = "FAUXCAM-SCAN-TEST"
+    private static let deadlineSeconds: TimeInterval = 25
+
+    @Test("injected guest scans a QR from the source and hands it to a metadata delegate")
+    func injectedGuestScansQRForMetadataDelegate() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        SimulatorFixtureHarness.buildAndInstall(onto: deviceIdentifier)
+        let socketPath = "/private/tmp/com.fauxcam/metadata-\(ProcessInfo.processInfo.processIdentifier).sock"
+        let captured = try SimulatorFixtureHarness.withHostServer(socketPath: socketPath, source: QRCodeSource(text: Self.payload)) {
+            SimulatorFixtureHarness.launchAndCapture(
+                deviceIdentifier: deviceIdentifier, bundleIdentifier: Self.fixtureBundleIdentifier,
+                logCategory: "probe",
+                childEnvironment: [
+                    "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES": RepositoryLayout.distributedDylib.path,
+                    "SIMCTL_CHILD_FAUXCAM_SOCKET": socketPath,
+                    "SIMCTL_CHILD_FAUXCAM_METADATA_PROBE": "1"
+                ],
+                untilContains: "value=\(Self.payload)", deadlineSeconds: Self.deadlineSeconds)
+        }
+        #expect(captured.contains("value=\(Self.payload)"), Comment(rawValue: "expected scanned QR value; captured:\n\(captured)"))
+    }
+}
+
+@Suite("Phase 7: photo capture delivery", .enabled(if: BootedSimulatorGate.isSatisfied, Comment(rawValue: BootedSimulatorGate.skipReason)))
+struct PhotoCaptureSmoke {
+    private static let fixtureBundleIdentifier =
+        ProcessInfo.processInfo.environment["FAUXCAM_FIXTURE_BUNDLE_ID"] ?? "com.fauxcam.fixture"
+    private static let deadlineSeconds: TimeInterval = 25
+
+    @Test("injected guest delivers a captured photo to an AVCapturePhotoCaptureDelegate")
+    func injectedGuestDeliversCapturedPhoto() throws {
+        let deviceIdentifier = try #require(BootedSimulatorGate.firstBootedDeviceIdentifier())
+        SimulatorFixtureHarness.buildAndInstall(onto: deviceIdentifier)
+        let socketPath = "/private/tmp/com.fauxcam/photo-\(ProcessInfo.processInfo.processIdentifier).sock"
+        let color = (blue: UInt8(20), green: UInt8(140), red: UInt8(60), alpha: UInt8(255))
+        let captured = try SimulatorFixtureHarness.withHostServer(socketPath: socketPath, source: ImageSource(solidColor: color)) {
+            SimulatorFixtureHarness.launchAndCapture(
+                deviceIdentifier: deviceIdentifier, bundleIdentifier: Self.fixtureBundleIdentifier,
+                logCategory: "probe",
+                childEnvironment: [
+                    "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES": RepositoryLayout.distributedDylib.path,
+                    "SIMCTL_CHILD_FAUXCAM_SOCKET": socketPath,
+                    "SIMCTL_CHILD_FAUXCAM_PHOTO_PROBE": "1"
+                ],
+                untilContains: "photo received", deadlineSeconds: Self.deadlineSeconds)
+        }
+        #expect(captured.contains("photo received"), Comment(rawValue: "expected a captured photo; captured:\n\(captured)"))
     }
 }
 
