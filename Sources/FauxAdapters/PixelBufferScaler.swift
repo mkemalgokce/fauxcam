@@ -94,8 +94,9 @@ struct PixelBufferScaler {
         )
     }
 
-    /// The source-aspect rectangle the user's region selects, clamped fully inside the source so the
-    /// crop never bleeds past an edge. `region.centerY` is measured from the TOP (matching the overlay).
+    /// The source-aspect rectangle the user's region selects. NOT clamped — it may extend past the
+    /// source (zoom-out below 1× field of view, or panning past an edge); the area outside the source
+    /// is filled black by `composed`. `region.centerY` is measured from the TOP (matching the overlay).
     func sourceCropRect(sourceWidth: CGFloat, sourceHeight: CGFloat, region: CropRegion) -> CGRect {
         let regionAspect = CGFloat(region.aspect) > 0 ? CGFloat(region.aspect) : 1
         let fitWidth: CGFloat, fitHeight: CGFloat
@@ -110,16 +111,14 @@ struct PixelBufferScaler {
         let cropHeight = fitHeight * CGFloat(region.zoom)
         let centerPixelX = CGFloat(region.centerX) * sourceWidth
         let centerPixelTop = CGFloat(region.centerY) * sourceHeight
-        let halfWidth = cropWidth / 2, halfHeight = cropHeight / 2
-        let clampedX = min(sourceWidth - halfWidth, max(halfWidth, centerPixelX))
-        let clampedTop = min(sourceHeight - halfHeight, max(halfHeight, centerPixelTop))
-        let originX = clampedX - halfWidth
-        let originFromTop = clampedTop - halfHeight
+        let originX = centerPixelX - cropWidth / 2
+        let originFromTop = centerPixelTop - cropHeight / 2
         let originFromBottom = sourceHeight - originFromTop - cropHeight
         return CGRect(x: originX, y: originFromBottom, width: cropWidth, height: cropHeight)
     }
 
-    /// Crops `image` to the user's region and scales it to `width`×`height`.
+    /// Crops `image` to the user's region and scales it to `width`×`height`, filling any area outside
+    /// the source with black (zoom-out / pan-past-edge).
     func composed(_ image: CIImage, toWidth width: Int, height: Int, region: CropRegion) -> CIImage {
         let extent = image.extent
         guard extent.width > 0, extent.height > 0, extent.width.isFinite, extent.height.isFinite else { return image }
@@ -127,9 +126,11 @@ struct PixelBufferScaler {
         let absolute = CGRect(x: extent.origin.x + crop.origin.x, y: extent.origin.y + crop.origin.y,
                               width: crop.width, height: crop.height)
         guard absolute.width > 0, absolute.height > 0 else { return image }
+        let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: absolute)
         let scaleX = CGFloat(width) / absolute.width
         let scaleY = CGFloat(height) / absolute.height
         return image
+            .composited(over: black)
             .cropped(to: absolute)
             .transformed(by: CGAffineTransform(translationX: -absolute.origin.x, y: -absolute.origin.y))
             .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))

@@ -1,18 +1,18 @@
 import SwiftUI
 import AppKit
-import AVFoundation
-import CoreImage.CIFilterBuiltins
 import FauxDomain
+import FauxAdapters
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = SessionController()
-    let selfView = SelfViewModel()
+    let camera = CameraAuthorization()
+    let preview = PreviewStreamer()
     let appIcons = AppIconStore()
 
     func applicationWillTerminate(_ notification: Notification) {
         controller.stopSynchronously()
-        selfView.stop()
+        preview.stop()
     }
 }
 
@@ -22,7 +22,8 @@ struct FauxCamApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            RootView(controller: appDelegate.controller, selfView: appDelegate.selfView, appIcons: appDelegate.appIcons)
+            RootView(controller: appDelegate.controller, camera: appDelegate.camera,
+                     preview: appDelegate.preview, appIcons: appDelegate.appIcons)
                 .frame(width: 360)
         } label: {
             Image(nsImage: Self.menuBarIcon)
@@ -50,7 +51,8 @@ struct FauxCamApp: App {
 
 struct RootView: View {
     @ObservedObject var controller: SessionController
-    @ObservedObject var selfView: SelfViewModel
+    @ObservedObject var camera: CameraAuthorization
+    @ObservedObject var preview: PreviewStreamer
     @ObservedObject var appIcons: AppIconStore
     @Environment(\.controlActiveState) private var controlActiveState
 
@@ -63,14 +65,14 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            ViewfinderCard(controller: controller, selfView: selfView)
+            ViewfinderCard(controller: controller, camera: camera, preview: preview)
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
             VStack(spacing: 12) {
                 destinationSection
                 sourceSection
-                frameSection
+                zoomSection
             }
             .padding(.horizontal, 16)
 
@@ -78,16 +80,29 @@ struct RootView: View {
         }
         .onAppear {
             controller.refresh()
+            camera.refresh()
             appIcons.load(controller.installedApps, on: controller.selectedUDID)
-            syncSelfView()
+            reconfigurePreview()
+            preview.start()
         }
-        .onDisappear { selfView.stop() }
-        .onChange(of: controller.sourceKind) { _, _ in syncSelfView() }
+        .onDisappear { preview.stop() }
+        .onChange(of: controller.sourceKind) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.imagePath) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.videoPath) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.qrText) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.deviceAspect) { _, _ in reconfigurePreview() }
+        .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region) }
+        .onChange(of: camera.status) { _, _ in preview.rebuild() }
         .onChange(of: controller.installedApps) { _, apps in appIcons.load(apps, on: controller.selectedUDID) }
         .onChange(of: controller.selectedUDID) { _, _ in appIcons.load(controller.installedApps, on: controller.selectedUDID) }
         .onChange(of: controlActiveState) { _, state in
-            if state == .inactive { selfView.stop() } else { syncSelfView() }
+            if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
+    }
+
+    private func reconfigurePreview() {
+        preview.setCrop(controller.region)
+        preview.configure(descriptor: controller.sourceDescriptor, aspect: controller.outputAspect)
     }
 
     // MARK: Destination
@@ -126,8 +141,7 @@ struct RootView: View {
                     } label: {
                         targetAppLabel
                     }
-                    .menuStyle(.button)
-                    .frame(width: 196)
+                    .menuStyle(.button).frame(width: 196)
                     .disabled(controller.installedApps.isEmpty)
                 }
             }
@@ -173,53 +187,35 @@ struct RootView: View {
         }
     }
 
-    // MARK: Frame (shape + zoom)
+    // MARK: Zoom
 
-    @ViewBuilder private var frameSection: some View {
+    @ViewBuilder private var zoomSection: some View {
         if controller.sourceKind.supportsFraming {
             GroupBox {
-                HStack(spacing: 8) {
-                    Button { stepZoom(-0.05) } label: { Image(systemName: "minus.magnifyingglass") }
-                        .buttonStyle(.borderless).help("Show less (zoom in)")
-                    Slider(value: zoomBinding, in: 0.1...1)
-                    Button { stepZoom(0.05) } label: { Image(systemName: "plus.magnifyingglass") }
-                        .buttonStyle(.borderless).help("Show more (zoom out)")
-                    Text("\(controller.region.zoomPercent)%")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
-                    if !controller.region.isCentered {
-                        Button { controller.region = CropRegion(zoom: controller.region.zoom, aspect: controller.region.aspect) } label: {
-                            Image(systemName: "scope")
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    Text("Scroll or pinch over the preview to zoom; drag to move.")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer()
+                    Text(magnificationText)
+                        .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+                    if controller.region.zoom != 1 || !controller.region.isCentered {
+                        Button { controller.region = CropRegion(aspect: controller.region.aspect) } label: {
+                            Image(systemName: "arrow.counterclockwise")
                         }
-                        .buttonStyle(.borderless).help("Re-center")
+                        .buttonStyle(.borderless).help("Reset framing")
                     }
                     if controller.aspectChangedWhileRunning {
                         Button("Apply") { controller.restart() }
                             .buttonStyle(.borderedProminent).controlSize(.small)
-                            .help("Relaunch at the new device size")
                     }
                 }
-                .help("Drag the box on the preview to pick which part of the source the app sees; zoom sets how much.")
             }
         }
     }
 
-    private func stepZoom(_ delta: Double) {
-        controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY,
-                                       zoom: controller.region.zoom + delta, aspect: controller.region.aspect)
-    }
-
-    private var zoomBinding: Binding<Double> {
-        Binding(get: { controller.region.zoom },
-                set: { controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: $0, aspect: controller.region.aspect) })
-    }
-
-    private func syncSelfView() {
-        selfView.refreshAuthorization()
-        if controller.sourceKind == .webcam, selfView.authorization == .authorized {
-            selfView.start()
-        } else {
-            selfView.stop()
-        }
+    private var magnificationText: String {
+        String(format: "%.1f×", 1.0 / max(controller.region.zoom, 0.0001))
     }
 }
 
@@ -243,126 +239,84 @@ struct AppIconThumbnail: View {
     }
 }
 
-// MARK: - Viewfinder
-
-/// The raw, uncropped pixels of the active source. `RegionPreview` applies the crop region.
-struct RawSourceView: View {
-    @ObservedObject var controller: SessionController
-    @ObservedObject var selfView: SelfViewModel
-
-    var body: some View {
-        switch controller.sourceKind {
-        case .image:
-            if controller.imagePath.isEmpty {
-                TestPatternView()
-            } else if let image = controller.previewImage {
-                Image(nsImage: image).resizable()
-            } else {
-                Color.black
-            }
-        case .webcam:
-            if selfView.authorization == .authorized {
-                CameraPreview(session: selfView.session)
-            } else {
-                Color.black.overlay(Image(systemName: "web.camera").font(.title).foregroundStyle(.white.opacity(0.4)))
-            }
-        case .video:
-            Color.black.overlay(
-                VStack(spacing: 6) {
-                    Image(systemName: "film").font(.system(size: 26)).foregroundStyle(.white.opacity(0.5))
-                    if !controller.videoPath.isEmpty {
-                        Text((controller.videoPath as NSString).lastPathComponent)
-                            .font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.horizontal, 20)
-                    }
-                }
-            )
-        case .qr:
-            if let qr = QRThumbnail.render(controller.qrText), !controller.qrText.isEmpty {
-                Color(white: 0.96).overlay(Image(nsImage: qr).resizable().interpolation(.none).scaledToFit().padding(8))
-            } else {
-                Color(white: 0.96).overlay(Image(systemName: "qrcode").font(.title).foregroundStyle(.black.opacity(0.25)))
-            }
-        }
-    }
-}
-
-/// Renders the chosen crop region of a source — mirrors PixelBufferScaler so the preview is WYSIWYG.
-struct RegionPreview<Source: View>: View {
-    let region: CropRegion
-    @ViewBuilder var source: () -> Source
-
-    var body: some View {
-        GeometryReader { geo in
-            let box = geo.size
-            let fit = fitSize(aspect: region.aspect, in: box)
-            let windowWidth = max(1, fit.width * region.zoom)
-            let windowHeight = max(1, fit.height * region.zoom)
-            let scale = max(box.width / windowWidth, box.height / windowHeight)
-            source()
-                .scaledToFill()
-                .frame(width: box.width, height: box.height)
-                .scaleEffect(scale, anchor: .center)
-                .offset(x: (0.5 - region.centerX) * box.width * scale,
-                        y: (0.5 - region.centerY) * box.height * scale)
-                .frame(width: box.width, height: box.height)
-                .clipped()
-        }
-    }
-
-    private func fitSize(aspect: Double, in box: CGSize) -> CGSize {
-        Double(box.width / box.height) > aspect
-            ? CGSize(width: box.height * aspect, height: box.height)
-            : CGSize(width: box.width, height: box.width / aspect)
-    }
-}
+// MARK: - Viewfinder (renders frames only — source-agnostic)
 
 struct ViewfinderCard: View {
     @ObservedObject var controller: SessionController
-    @ObservedObject var selfView: SelfViewModel
+    @ObservedObject var camera: CameraAuthorization
+    @ObservedObject var preview: PreviewStreamer
     @State private var dragStart: (x: Double, y: Double)?
+
+    private var needsCameraPermission: Bool {
+        controller.sourceKind == .webcam && camera.status != .authorized
+    }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
-            RegionPreview(region: controller.region) {
-                RawSourceView(controller: controller, selfView: selfView)
+            if needsCameraPermission {
+                permissionContent
+            } else if let image = preview.image {
+                Image(nsImage: image).resizable().scaledToFit()
+            } else {
+                ProgressView()
             }
-            .contentShape(Rectangle())
-            .gesture(panGesture)
         }
         .frame(height: 188)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator, lineWidth: 1))
-        .overlay(alignment: .topLeading) {
-            if controller.isRunning {
-                LiveBadge().padding(10)
-                    .help("Streaming frames to the app. Press Stop to tear down.")
-                    .transition(.opacity)
+        .overlay {
+            if controller.sourceKind.supportsFraming && !needsCameraPermission {
+                ZoomScrollCatcher(onZoom: applyZoom)
+                    .gesture(panGesture)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if controller.sourceKind.supportsFraming {
-                Label("drag to pan", systemImage: "hand.draw")
-                    .font(.caption2).foregroundStyle(.white.opacity(0.65)).padding(8)
+        .overlay(alignment: .topLeading) {
+            if controller.isRunning {
+                LiveBadge().padding(10).transition(.opacity)
+                    .help("Streaming frames to the app. Press Stop to tear down.")
             }
         }
         .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
-                RegionPreview(region: controller.region) {
-                    RawSourceView(controller: controller, selfView: selfView)
+                if let image = preview.image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Color.black
                 }
             }
             .padding(10)
-            .help("How the source maps onto the selected device")
+            .help("How the frame maps onto the selected device")
         }
         .animation(.easeInOut(duration: 0.2), value: controller.isRunning)
+    }
+
+    private var permissionContent: some View {
+        ContentUnavailableView {
+            Label("Camera Off", systemImage: "web.camera")
+        } description: {
+            Text(camera.status == .denied
+                 ? "Enable camera access in System Settings › Privacy."
+                 : "Allow camera access to use your Mac camera.")
+        } actions: {
+            Button(camera.status == .denied ? "Open Settings" : "Enable Camera") {
+                if camera.status == .denied { camera.openSystemSettings() }
+                else { Task { await camera.request() } }
+            }
+            .buttonStyle(.glass)
+        }
+    }
+
+    private func applyZoom(_ factor: Double) {
+        guard factor > 0 else { return }
+        controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY,
+                                       zoom: controller.region.zoom / factor, aspect: controller.region.aspect)
     }
 
     private var panGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                guard controller.sourceKind.supportsFraming else { return }
                 let start = dragStart ?? (controller.region.centerX, controller.region.centerY)
                 if dragStart == nil { dragStart = start }
                 let dx = Double(value.translation.width) / 328.0 * controller.region.zoom
@@ -392,26 +346,13 @@ struct ViewfinderCard: View {
                 Label(controller.videoPath.isEmpty ? "Choose Video" : "Change", systemImage: controller.videoPath.isEmpty ? "plus" : "film")
             }
             .buttonStyle(.glass).controlSize(.small)
-        case .webcam:
-            if selfView.authorization != .authorized {
-                Button(selfView.authorization == .denied ? "Open Settings" : "Enable Camera") {
-                    if selfView.authorization == .denied {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    } else {
-                        Task { await selfView.requestAccessAndStart() }
-                    }
-                }
-                .buttonStyle(.glass).controlSize(.small)
-            }
-        case .qr:
+        case .webcam, .qr:
             EmptyView()
         }
     }
 }
 
-/// A small phone bezel showing how the source looks on the selected device (its aspect/crop).
+/// A small phone bezel showing how the frame maps onto the selected device.
 struct DeviceFramePiP<Content: View>: View {
     let aspect: CGFloat
     @ViewBuilder var content: Content
@@ -436,23 +377,6 @@ struct DeviceFramePiP<Content: View>: View {
     }
 }
 
-struct TestPatternView: View {
-    private let bars: [Color] = [
-        Color(red: 0.80, green: 0.80, blue: 0.80),
-        Color(red: 0.85, green: 0.85, blue: 0.10),
-        Color(red: 0.10, green: 0.80, blue: 0.85),
-        Color(red: 0.10, green: 0.75, blue: 0.20),
-        Color(red: 0.85, green: 0.10, blue: 0.80),
-        Color(red: 0.85, green: 0.15, blue: 0.15),
-        Color(red: 0.15, green: 0.20, blue: 0.85)
-    ]
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(bars.indices, id: \.self) { bars[$0] }
-        }
-    }
-}
-
 struct LiveBadge: View {
     var body: some View {
         HStack(spacing: 4) {
@@ -461,19 +385,6 @@ struct LiveBadge: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .glassEffect(.regular, in: .capsule)
-    }
-}
-
-enum QRThumbnail {
-    static func render(_ text: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(text.utf8)
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let image = NSImage(size: rep.size)
-        image.addRepresentation(rep)
-        return image
     }
 }
 

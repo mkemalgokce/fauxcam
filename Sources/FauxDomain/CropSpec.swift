@@ -10,9 +10,9 @@ public struct CropRegion: Sendable, Equatable {
     public var aspect: Double
 
     public init(centerX: Double = 0.5, centerY: Double = 0.5, zoom: Double = 1.0, aspect: Double = 1.0) {
-        self.centerX = min(1, max(0, centerX))
-        self.centerY = min(1, max(0, centerY))
-        self.zoom = min(1, max(0.05, zoom))
+        self.centerX = centerX
+        self.centerY = centerY
+        self.zoom = min(10, max(0.05, zoom))
         self.aspect = aspect
     }
 
