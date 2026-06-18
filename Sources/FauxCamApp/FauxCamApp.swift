@@ -1,13 +1,23 @@
 import SwiftUI
+import AppKit
 import FauxAdapters
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let controller = SessionController()
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if controller.isRunning { controller.stop() }
+    }
+}
 
 @main
 struct FauxCamApp: App {
-    @StateObject private var controller = SessionController()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra("FauxCam", systemImage: "camera.fill") {
-            FauxCamMenu(controller: controller)
+            FauxCamMenu(controller: appDelegate.controller)
                 .frame(width: 320)
                 .padding()
         }

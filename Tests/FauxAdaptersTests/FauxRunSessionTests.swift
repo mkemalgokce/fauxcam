@@ -50,3 +50,15 @@ private let device = SimDevice(udid: "UDID-1", name: "iPhone", runtime: "iOS 26.
     session.stop()
     #expect(recorder.calls.last?.arguments == ["terminate", "UDID-1", "com.app"])
 }
+
+@Test func runSessionRejectsASecondStartWhileRunning() throws {
+    let session = FauxRunSession(runSimctl: { _, _ in 0 }, fileExists: { _ in true })
+    try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+                      configuration: .init(dylibPath: "/lib.dylib", socketPath: uniqueSocket("first")))
+    defer { session.stop() }
+
+    #expect(throws: FauxRunSession.StartError.self) {
+        try session.start(sourceSpec: "image", device: device, bundleIdentifier: "com.app",
+                          configuration: .init(dylibPath: "/lib.dylib", socketPath: uniqueSocket("second")))
+    }
+}

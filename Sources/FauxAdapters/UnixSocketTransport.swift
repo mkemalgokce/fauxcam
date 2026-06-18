@@ -30,12 +30,21 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
     deinit { close() }
 
     public func awaitDemand() throws -> Demand? {
-        if clientDescriptor < 0 {
-            let accepted = Darwin.accept(listenDescriptor, nil, nil)
+        if currentDescriptor(\.clientDescriptor) < 0 {
+            let listenFD = currentDescriptor(\.listenDescriptor)
+            if listenFD < 0 { return nil }
+            let accepted = Darwin.accept(listenFD, nil, nil)
             if accepted < 0 { return nil }
+            descriptorLock.lock()
+            if listenDescriptor < 0 {
+                descriptorLock.unlock()
+                Darwin.close(accepted)
+                return nil
+            }
             clientDescriptor = accepted
             var suppressSignalPipe: Int32 = 1
-            setsockopt(clientDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, socklen_t(MemoryLayout<Int32>.size))
+            setsockopt(accepted, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, socklen_t(MemoryLayout<Int32>.size))
+            descriptorLock.unlock()
         }
         if !didReadHandshake {
             guard let helloHeader = try readHeader(), helloHeader.isValid,
@@ -57,6 +66,12 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
 
     private func boundedBodyCount(_ length: UInt32) -> Int? {
         length <= UInt32(Self.maxBodyBytes) ? Int(length) : nil
+    }
+
+    private func currentDescriptor(_ keyPath: KeyPath<UnixSocketTransport, Int32>) -> Int32 {
+        descriptorLock.lock()
+        defer { descriptorLock.unlock() }
+        return self[keyPath: keyPath]
     }
 
     public func deliver(_ frame: Frame) throws {
@@ -129,11 +144,13 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
     }
 
     private func readFully(_ count: Int) throws -> [UInt8]? {
+        let descriptor = currentDescriptor(\.clientDescriptor)
+        guard descriptor >= 0 else { return nil }
         var buffer = [UInt8](repeating: 0, count: count)
         var total = 0
         while total < count {
             let received = buffer.withUnsafeMutableBytes { raw in
-                Darwin.read(clientDescriptor, raw.baseAddress!.advanced(by: total), count - total)
+                Darwin.read(descriptor, raw.baseAddress!.advanced(by: total), count - total)
             }
             if received == 0 { return nil }
             if received < 0 {
@@ -146,10 +163,12 @@ public final class UnixSocketTransport: FrameTransport, @unchecked Sendable {
     }
 
     private func writeFully(_ bytes: [UInt8]) throws {
+        let descriptor = currentDescriptor(\.clientDescriptor)
+        guard descriptor >= 0 else { throw FrameTransportError.writeFailed(errno: EBADF) }
         var total = 0
         while total < bytes.count {
             let sent = bytes.withUnsafeBytes { raw in
-                Darwin.write(clientDescriptor, raw.baseAddress!.advanced(by: total), bytes.count - total)
+                Darwin.write(descriptor, raw.baseAddress!.advanced(by: total), bytes.count - total)
             }
             if sent < 0 {
                 if errno == EINTR { continue }

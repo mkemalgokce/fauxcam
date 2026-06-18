@@ -20,7 +20,7 @@ public enum SimctlDeviceListDecoder {
         guard let list = try? JSONDecoder().decode(ListDTO.self, from: data) else { return [] }
         var devices: [SimDevice] = []
         for (runtimeIdentifier, entries) in list.devices {
-            for entry in entries where entry.state == nil || entry.state == "Booted" {
+            for entry in entries where entry.state == "Booted" {
                 devices.append(SimDevice(udid: entry.udid, name: entry.name, runtime: readableRuntime(from: runtimeIdentifier)))
             }
         }
@@ -54,7 +54,7 @@ public struct SimctlDeviceProvider: SimDeviceProviding {
         process.arguments = ["simctl"] + arguments
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

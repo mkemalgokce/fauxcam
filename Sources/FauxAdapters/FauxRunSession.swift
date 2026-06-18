@@ -4,11 +4,13 @@ import FauxApplication
 
 public final class FauxRunSession: @unchecked Sendable {
     public enum StartError: Error, CustomStringConvertible {
+        case alreadyRunning
         case dylibMissing(String)
         case launchFailed
 
         public var description: String {
             switch self {
+            case .alreadyRunning: return "a session is already running"
             case .dylibMissing(let path): return "guest dylib not found at \(path) (run Scripts/build-dylib.sh)"
             case .launchFailed: return "simctl launch failed"
             }
@@ -29,6 +31,7 @@ public final class FauxRunSession: @unchecked Sendable {
     private let fileExists: (String) -> Bool
     private let sourceFactory = FrameSourceFactory()
     private var transport: UnixSocketTransport?
+    private var serverThread: Thread?
     private var device: SimDevice?
     private var bundleIdentifier: String?
 
@@ -41,6 +44,7 @@ public final class FauxRunSession: @unchecked Sendable {
     }
 
     public func start(sourceSpec: String, device: SimDevice, bundleIdentifier: String, configuration: Configuration) throws {
+        guard transport == nil else { throw StartError.alreadyRunning }
         guard fileExists(configuration.dylibPath) else { throw StartError.dylibMissing(configuration.dylibPath) }
 
         let transport = try UnixSocketTransport(listeningAt: configuration.socketPath)
@@ -54,9 +58,11 @@ public final class FauxRunSession: @unchecked Sendable {
         let status = runSimctl(["launch", "--terminate-running-process", device.udid, bundleIdentifier], environment)
         guard status == 0 else {
             transport.close()
+            joinServerThread(serverThread)
             throw StartError.launchFailed
         }
         self.transport = transport
+        self.serverThread = serverThread
         self.device = device
         self.bundleIdentifier = bundleIdentifier
     }
@@ -64,10 +70,19 @@ public final class FauxRunSession: @unchecked Sendable {
     public func stop() {
         transport?.close()
         transport = nil
+        if let serverThread { joinServerThread(serverThread) }
+        serverThread = nil
         if let device, let bundleIdentifier {
             _ = runSimctl(["terminate", device.udid, bundleIdentifier], nil)
         }
         device = nil
         bundleIdentifier = nil
+    }
+
+    private func joinServerThread(_ thread: Thread, timeout: TimeInterval = 2) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !thread.isFinished && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
     }
 }
