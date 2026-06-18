@@ -12,31 +12,31 @@ struct PixelBufferScaler {
 
     func frame(
         from imageBuffer: CVImageBuffer,
-        crop: CropSpec = .identity,
+        region: CropRegion = .identity,
         position: CameraPosition,
         width: Int,
         height: Int,
         presentationTimeNanoseconds: UInt64
     ) -> Frame? {
         guard width > 0, height > 0 else { return nil }
-        let composed = self.composed(CIImage(cvImageBuffer: imageBuffer), toWidth: width, height: height, crop: crop)
+        let composed = self.composed(CIImage(cvImageBuffer: imageBuffer), toWidth: width, height: height, region: region)
         return render(composed, position: position, width: width, height: height, presentationTimeNanoseconds: presentationTimeNanoseconds)
     }
 
     func frame(
         from image: CIImage,
-        crop: CropSpec = .identity,
+        region: CropRegion,
         position: CameraPosition,
         width: Int,
         height: Int,
         presentationTimeNanoseconds: UInt64
     ) -> Frame? {
         guard width > 0, height > 0 else { return nil }
-        let composed = self.composed(image, toWidth: width, height: height, crop: crop)
+        let composed = self.composed(image, toWidth: width, height: height, region: region)
         return render(composed, position: position, width: width, height: height, presentationTimeNanoseconds: presentationTimeNanoseconds)
     }
 
-    /// Legacy entry for sources that already produce a target-sized canvas (QR) and want no crop.
+    /// Legacy entry for sources that already produce a target-sized canvas (QR): render as-is.
     func frame(
         from image: CIImage,
         aspectFill: Bool,
@@ -46,8 +46,7 @@ struct PixelBufferScaler {
         presentationTimeNanoseconds: UInt64
     ) -> Frame? {
         guard width > 0, height > 0 else { return nil }
-        let prepared = aspectFill ? composed(image, toWidth: width, height: height, crop: .identity) : image
-        return render(prepared, position: position, width: width, height: height, presentationTimeNanoseconds: presentationTimeNanoseconds)
+        return render(image, position: position, width: width, height: height, presentationTimeNanoseconds: presentationTimeNanoseconds)
     }
 
     private func render(
@@ -95,34 +94,44 @@ struct PixelBufferScaler {
         )
     }
 
-    /// Maps `image` onto a `width`×`height` canvas per `crop`: fill (cover, crop a pannable window)
-    /// or fit (contain, letterboxed over black). Pan is normalized -1...1 and bounded by the slack,
-    /// so fill never reveals an edge.
-    func composed(_ image: CIImage, toWidth width: Int, height: Int, crop: CropSpec) -> CIImage {
+    /// The source-aspect rectangle the user's region selects, clamped fully inside the source so the
+    /// crop never bleeds past an edge. `region.centerY` is measured from the TOP (matching the overlay).
+    func sourceCropRect(sourceWidth: CGFloat, sourceHeight: CGFloat, region: CropRegion) -> CGRect {
+        let regionAspect = CGFloat(region.aspect) > 0 ? CGFloat(region.aspect) : 1
+        let fitWidth: CGFloat, fitHeight: CGFloat
+        if sourceWidth / sourceHeight > regionAspect {
+            fitHeight = sourceHeight
+            fitWidth = sourceHeight * regionAspect
+        } else {
+            fitWidth = sourceWidth
+            fitHeight = sourceWidth / regionAspect
+        }
+        let cropWidth = fitWidth * CGFloat(region.zoom)
+        let cropHeight = fitHeight * CGFloat(region.zoom)
+        let centerPixelX = CGFloat(region.centerX) * sourceWidth
+        let centerPixelTop = CGFloat(region.centerY) * sourceHeight
+        let halfWidth = cropWidth / 2, halfHeight = cropHeight / 2
+        let clampedX = min(sourceWidth - halfWidth, max(halfWidth, centerPixelX))
+        let clampedTop = min(sourceHeight - halfHeight, max(halfHeight, centerPixelTop))
+        let originX = clampedX - halfWidth
+        let originFromTop = clampedTop - halfHeight
+        let originFromBottom = sourceHeight - originFromTop - cropHeight
+        return CGRect(x: originX, y: originFromBottom, width: cropWidth, height: cropHeight)
+    }
+
+    /// Crops `image` to the user's region and scales it to `width`×`height`.
+    func composed(_ image: CIImage, toWidth width: Int, height: Int, region: CropRegion) -> CIImage {
         let extent = image.extent
         guard extent.width > 0, extent.height > 0, extent.width.isFinite, extent.height.isFinite else { return image }
-        let targetWidth = CGFloat(width), targetHeight = CGFloat(height)
-        let scale = crop.fill
-            ? max(targetWidth / extent.width, targetHeight / extent.height)
-            : min(targetWidth / extent.width, targetHeight / extent.height)
-        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let scaledExtent = scaled.extent
-
-        if crop.fill {
-            let slackX = max(0, scaledExtent.width - targetWidth)
-            let slackY = max(0, scaledExtent.height - targetHeight)
-            let cropX = scaledExtent.origin.x + (scaledExtent.width - targetWidth) / 2 + CGFloat(crop.panX) * slackX / 2
-            let cropY = scaledExtent.origin.y + (scaledExtent.height - targetHeight) / 2 - CGFloat(crop.panY) * slackY / 2
-            return scaled
-                .cropped(to: CGRect(x: cropX, y: cropY, width: targetWidth, height: targetHeight))
-                .transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
-        } else {
-            let offsetX = (targetWidth - scaledExtent.width) / 2 - scaledExtent.origin.x
-            let offsetY = (targetHeight - scaledExtent.height) / 2 - scaledExtent.origin.y
-            let centered = scaled.transformed(by: CGAffineTransform(translationX: offsetX, y: offsetY))
-            let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
-            let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: targetRect)
-            return centered.composited(over: black).cropped(to: targetRect)
-        }
+        let crop = sourceCropRect(sourceWidth: extent.width, sourceHeight: extent.height, region: region)
+        let absolute = CGRect(x: extent.origin.x + crop.origin.x, y: extent.origin.y + crop.origin.y,
+                              width: crop.width, height: crop.height)
+        guard absolute.width > 0, absolute.height > 0 else { return image }
+        let scaleX = CGFloat(width) / absolute.width
+        let scaleY = CGFloat(height) / absolute.height
+        return image
+            .cropped(to: absolute)
+            .transformed(by: CGAffineTransform(translationX: -absolute.origin.x, y: -absolute.origin.y))
+            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
     }
 }

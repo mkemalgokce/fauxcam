@@ -13,7 +13,7 @@ public struct FrameSourceFactory {
 
     public init() {}
 
-    public func make(_ spec: String, crop: @escaping @Sendable () -> CropSpec = { .identity }) -> FrameSource {
+    public func make(_ spec: String, crop: @escaping @Sendable () -> CropRegion = { .identity }) -> FrameSource {
         if spec.hasPrefix(Self.qrPrefix) {
             return QRCodeSource(text: String(spec.dropFirst(Self.qrPrefix.count)))
         }

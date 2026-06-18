@@ -11,11 +11,11 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
     private let sourceImage: CIImage
     private let scaler = PixelBufferScaler()
     private let clock: @Sendable () -> UInt64
-    private let crop: @Sendable () -> CropSpec
+    private let crop: @Sendable () -> CropRegion
     private let cacheLock = NSLock()
-    private var cached: (width: Int, height: Int, position: CameraPosition, crop: CropSpec, bytesPerRow: Int, pixels: [UInt8])?
+    private var cached: (width: Int, height: Int, position: CameraPosition, crop: CropRegion, bytesPerRow: Int, pixels: [UInt8])?
 
-    public init?(contentsOf url: URL, maxPixelSize: Int = 1920, crop: @escaping @Sendable () -> CropSpec = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    public init?(contentsOf url: URL, maxPixelSize: Int = 1920, crop: @escaping @Sendable () -> CropRegion = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -28,7 +28,7 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
         self.clock = clock
     }
 
-    public init(ciImage: CIImage, crop: @escaping @Sendable () -> CropSpec = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+    public init(ciImage: CIImage, crop: @escaping @Sendable () -> CropRegion = { .identity }, clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.sourceImage = ciImage
         self.crop = crop
         self.clock = clock
@@ -50,7 +50,7 @@ public final class CustomImageSource: FrameSource, @unchecked Sendable {
             )
         }
         guard let frame = scaler.frame(
-            from: sourceImage, crop: crop,
+            from: sourceImage, region: crop,
             position: demand.position, width: demand.requestedWidth, height: demand.requestedHeight,
             presentationTimeNanoseconds: clock()
         ) else { return blackFrame(for: demand, clock: clock) }

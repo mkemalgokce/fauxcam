@@ -35,8 +35,8 @@ public final class FauxRunSession: @unchecked Sendable {
 
     private final class CropBox: @unchecked Sendable {
         private let lock = NSLock()
-        private var stored: CropSpec = .identity
-        var value: CropSpec {
+        private var stored: CropRegion = .identity
+        var value: CropRegion {
             get { lock.lock(); defer { lock.unlock() }; return stored }
             set { lock.lock(); stored = newValue; lock.unlock() }
         }
@@ -100,7 +100,7 @@ public final class FauxRunSession: @unchecked Sendable {
     }
 
     /// Live crop/pan applied to the running source (image/video) on the next pulled frame.
-    public func setCrop(_ crop: CropSpec) {
+    public func setCrop(_ crop: CropRegion) {
         cropBox.value = crop
     }
 

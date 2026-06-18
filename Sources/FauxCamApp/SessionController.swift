@@ -52,20 +52,38 @@ final class SessionController: ObservableObject {
     @Published var selectedUDID: String = ""
     @Published var installedApps: [InstalledApp] = []
     @Published var bundleIdentifier: String = ""
-    static let minDimension = 240
-    static let maxDimension = 1920
+    static let outputShortSide = 720
 
     @Published var sourceKind: SourceKind = .image
-    @Published var width: Int = 1280
-    @Published var height: Int = 720
-    @Published var crop: CropSpec = .identity { didSet { session.setCrop(crop) } }
+    @Published var region: CropRegion = .identity { didSet { session.setCrop(region) } }
+    @Published var cropShape: CropShape = .device { didSet { if !isRunning { syncRegionAspect() } } }
     @Published var deviceAspect: Double = 9.0 / 19.5
-    @Published private(set) var appliedWidth: Int = 0
-    @Published private(set) var appliedHeight: Int = 0
+    @Published private(set) var appliedShape: CropShape = .device
     @Published var imagePath: String = "" { didSet { loadPreviewImage() } }
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
     @Published private(set) var previewImage: NSImage?
+
+    /// Output aspect (width/height) from the chosen shape, deferring to the live device aspect.
+    var outputAspect: Double { cropShape.aspectRatio(deviceAspect: deviceAspect) }
+
+    /// The guest frame size (fixed at launch), derived from the shape at a fixed short-side base.
+    var outputSize: (width: Int, height: Int) {
+        let aspect = outputAspect
+        if aspect >= 1 {
+            return (even(Double(Self.outputShortSide) * aspect), Self.outputShortSide)
+        } else {
+            return (Self.outputShortSide, even(Double(Self.outputShortSide) / aspect))
+        }
+    }
+    private func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
+
+    var shapeChangedWhileRunning: Bool { isRunning && cropShape != appliedShape }
+
+    /// Keeps the live region's aspect equal to the chosen output aspect (so the crop never distorts).
+    func syncRegionAspect() {
+        region = CropRegion(centerX: region.centerX, centerY: region.centerY, zoom: region.zoom, aspect: outputAspect)
+    }
 
     private func loadPreviewImage() {
         let path = imagePath
@@ -77,9 +95,6 @@ final class SessionController: ObservableObject {
         }
     }
 
-    var resolutionChangedWhileRunning: Bool {
-        isRunning && (width != appliedWidth || height != appliedHeight)
-    }
     @Published var isRunning: Bool = false
     @Published var isBusy: Bool = false
     @Published var status: String = "Ready when you are."
@@ -173,6 +188,7 @@ final class SessionController: ObservableObject {
                 self.aspectInFlight = false
                 guard udid == self.selectedUDID, let aspect else { return }
                 self.deviceAspect = aspect
+                if !self.isRunning, self.cropShape == .device { self.syncRegionAspect() }
             }
         }
     }
@@ -231,12 +247,14 @@ final class SessionController: ObservableObject {
         guard canStart, let device = selectedDevice else { return }
         let spec = resolvedSourceSpec
         let bundle = bundleIdentifier
-        let startWidth = width, startHeight = height
+        let startShape = cropShape
+        syncRegionAspect()
+        let size = outputSize
         let configuration = FauxRunSession.Configuration(
             dylibPath: dylibPath, socketPath: socketPath,
-            width: startWidth, height: startHeight
+            width: size.width, height: size.height
         )
-        session.setCrop(crop)
+        session.setCrop(region)
         isBusy = true
         isError = false
         status = "Launching \(device.name)…"
@@ -247,8 +265,7 @@ final class SessionController: ObservableObject {
                     self.isBusy = false
                     self.isRunning = true
                     self.isError = false
-                    self.appliedWidth = startWidth
-                    self.appliedHeight = startHeight
+                    self.appliedShape = startShape
                     self.status = "serving \(spec) → \(bundle)"
                 }
             } catch {
@@ -283,7 +300,7 @@ final class SessionController: ObservableObject {
     func restart() {
         guard isRunning, !isBusy else { return }
         isBusy = true
-        status = "Restarting at \(width)×\(height)…"
+        status = "Restarting at \(outputSize.width)×\(outputSize.height)…"
         Task.detached { [session] in
             session.stop()
             await MainActor.run {

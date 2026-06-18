@@ -70,7 +70,7 @@ struct RootView: View {
             VStack(spacing: 12) {
                 destinationSection
                 sourceSection
-                resolutionSection
+                frameSection
             }
             .padding(.horizontal, 16)
 
@@ -169,66 +169,58 @@ struct RootView: View {
                 Text(controller.sourceKind.footerHint)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-
-                if controller.sourceKind.supportsFraming {
-                    Divider()
-                    FramingControls(controller: controller)
-                }
             }
         }
     }
 
-    // MARK: Resolution
+    // MARK: Frame (shape + zoom)
 
-    private var resolutionSection: some View {
+    private var frameSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("Resolution", systemImage: "aspectratio")
+                    Label("Frame", systemImage: "aspectratio")
                     Spacer()
-                    Text("\(controller.width) × \(controller.height)")
+                    Text("\(controller.outputSize.width) × \(controller.outputSize.height)")
                         .font(.callout.monospacedDigit().weight(.medium))
                         .foregroundStyle(.secondary)
                 }
-                resolutionSlider("Width", binding: widthBinding)
-                resolutionSlider("Height", binding: heightBinding)
-                HStack(spacing: 6) {
-                    presetButton(1280, 720)
-                    presetButton(1920, 1080)
-                    presetButton(720, 1280)
-                    Spacer()
-                    if controller.resolutionChangedWhileRunning {
+                HStack(spacing: 8) {
+                    Picker("Shape", selection: $controller.cropShape) {
+                        Text("Square").tag(CropShape.square)
+                        Text("16:9").tag(CropShape.landscape)
+                        Text("9:16").tag(CropShape.portrait)
+                        Text("Device").tag(CropShape.device)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    if controller.shapeChangedWhileRunning {
                         Button("Apply") { controller.restart() }
                             .buttonStyle(.borderedProminent).controlSize(.small)
-                            .help("Relaunch the app at \(controller.width)×\(controller.height)")
+                            .help("Relaunch at \(controller.outputSize.width)×\(controller.outputSize.height)")
+                    }
+                }
+                if controller.sourceKind.supportsFraming {
+                    HStack(spacing: 8) {
+                        Text("Shown").font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+                        Slider(value: zoomBinding, in: 0.1...1)
+                        Text("\(controller.region.zoomPercent)%")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                        if !controller.region.isCentered {
+                            Button { controller.region = CropRegion(zoom: controller.region.zoom, aspect: controller.region.aspect) } label: {
+                                Image(systemName: "scope")
+                            }
+                            .buttonStyle(.borderless).help("Re-center")
+                        }
                     }
                 }
             }
-            .help("Frame size sent to the app. Tune Width and Height to fit the screen.")
+            .help("Output shape (aspect) is sent to the app. For image/video, set how much is shown and drag the box on the preview to pick which part.")
         }
     }
 
-    private func resolutionSlider(_ axis: String, binding: Binding<Double>) -> some View {
-        HStack(spacing: 8) {
-            Text(axis).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
-            Slider(value: binding, in: Double(SessionController.minDimension)...Double(SessionController.maxDimension), step: 16)
-        }
-    }
-
-    private func presetButton(_ width: Int, _ height: Int) -> some View {
-        Button("\(width)×\(height)") { controller.width = width; controller.height = height }
-            .buttonStyle(.bordered).controlSize(.small).monospacedDigit()
-    }
-
-    private var widthBinding: Binding<Double> {
-        Binding(get: { Double(controller.width) }, set: { controller.width = snap($0) })
-    }
-    private var heightBinding: Binding<Double> {
-        Binding(get: { Double(controller.height) }, set: { controller.height = snap($0) })
-    }
-    private func snap(_ value: Double) -> Int {
-        let stepped = (Int(value.rounded()) / 16) * 16
-        return max(SessionController.minDimension, min(SessionController.maxDimension, stepped))
+    private var zoomBinding: Binding<Double> {
+        Binding(get: { controller.region.zoom },
+                set: { controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: $0, aspect: controller.region.aspect) })
     }
 
     private func syncSelfView() {
@@ -261,61 +253,92 @@ struct AppIconThumbnail: View {
     }
 }
 
-// MARK: - Framing (fit/fill + pan)
-
-struct FramingControls: View {
-    @ObservedObject var controller: SessionController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Picker("Framing", selection: fillBinding) {
-                    Text("Fill").tag(true)
-                    Text("Fit").tag(false)
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 120)
-                .help("Fill crops to cover the frame; Fit shows the whole image with bars.")
-                Spacer()
-                if !controller.crop.isCentered {
-                    Button("Center") { controller.crop = CropSpec(fill: controller.crop.fill) }
-                        .buttonStyle(.bordered).controlSize(.small)
-                }
-            }
-            if controller.crop.fill {
-                panSlider("Pan X", binding: panXBinding)
-                panSlider("Pan Y", binding: panYBinding)
-            }
-        }
-    }
-
-    private func panSlider(_ title: String, binding: Binding<Double>) -> some View {
-        HStack(spacing: 8) {
-            Text(title).font(.caption).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
-            Slider(value: binding, in: -1...1)
-        }
-    }
-
-    private var fillBinding: Binding<Bool> {
-        Binding(get: { controller.crop.fill }, set: { controller.crop = CropSpec(fill: $0, panX: controller.crop.panX, panY: controller.crop.panY) })
-    }
-    private var panXBinding: Binding<Double> {
-        Binding(get: { controller.crop.panX }, set: { controller.crop = CropSpec(fill: controller.crop.fill, panX: $0, panY: controller.crop.panY) })
-    }
-    private var panYBinding: Binding<Double> {
-        Binding(get: { controller.crop.panY }, set: { controller.crop = CropSpec(fill: controller.crop.fill, panX: controller.crop.panX, panY: $0) })
-    }
-}
-
 // MARK: - Viewfinder
 
-struct ViewfinderCard: View {
+/// The raw, uncropped pixels of the active source. `RegionPreview` applies the crop region.
+struct RawSourceView: View {
     @ObservedObject var controller: SessionController
     @ObservedObject var selfView: SelfViewModel
 
     var body: some View {
+        switch controller.sourceKind {
+        case .image:
+            if controller.imagePath.isEmpty {
+                TestPatternView()
+            } else if let image = controller.previewImage {
+                Image(nsImage: image).resizable()
+            } else {
+                Color.black
+            }
+        case .webcam:
+            if selfView.authorization == .authorized {
+                CameraPreview(session: selfView.session)
+            } else {
+                Color.black.overlay(Image(systemName: "web.camera").font(.title).foregroundStyle(.white.opacity(0.4)))
+            }
+        case .video:
+            Color.black.overlay(
+                VStack(spacing: 6) {
+                    Image(systemName: "film").font(.system(size: 26)).foregroundStyle(.white.opacity(0.5))
+                    if !controller.videoPath.isEmpty {
+                        Text((controller.videoPath as NSString).lastPathComponent)
+                            .font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.horizontal, 20)
+                    }
+                }
+            )
+        case .qr:
+            if let qr = QRThumbnail.render(controller.qrText), !controller.qrText.isEmpty {
+                Color(white: 0.96).overlay(Image(nsImage: qr).resizable().interpolation(.none).scaledToFit().padding(8))
+            } else {
+                Color(white: 0.96).overlay(Image(systemName: "qrcode").font(.title).foregroundStyle(.black.opacity(0.25)))
+            }
+        }
+    }
+}
+
+/// Renders the chosen crop region of a source — mirrors PixelBufferScaler so the preview is WYSIWYG.
+struct RegionPreview<Source: View>: View {
+    let region: CropRegion
+    @ViewBuilder var source: () -> Source
+
+    var body: some View {
+        GeometryReader { geo in
+            let box = geo.size
+            let fit = fitSize(aspect: region.aspect, in: box)
+            let windowWidth = max(1, fit.width * region.zoom)
+            let windowHeight = max(1, fit.height * region.zoom)
+            let scale = max(box.width / windowWidth, box.height / windowHeight)
+            source()
+                .scaledToFill()
+                .frame(width: box.width, height: box.height)
+                .scaleEffect(scale, anchor: .center)
+                .offset(x: (0.5 - region.centerX) * box.width * scale,
+                        y: (0.5 - region.centerY) * box.height * scale)
+                .frame(width: box.width, height: box.height)
+                .clipped()
+        }
+    }
+
+    private func fitSize(aspect: Double, in box: CGSize) -> CGSize {
+        Double(box.width / box.height) > aspect
+            ? CGSize(width: box.height * aspect, height: box.height)
+            : CGSize(width: box.width, height: box.width / aspect)
+    }
+}
+
+struct ViewfinderCard: View {
+    @ObservedObject var controller: SessionController
+    @ObservedObject var selfView: SelfViewModel
+    @State private var dragStart: (x: Double, y: Double)?
+
+    var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14).fill(.quaternary)
-            SourceVisual(controller: controller, selfView: selfView)
+            RegionPreview(region: controller.region) {
+                RawSourceView(controller: controller, selfView: selfView)
+            }
+            .contentShape(Rectangle())
+            .gesture(panGesture)
         }
         .frame(height: 188)
         .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -327,15 +350,37 @@ struct ViewfinderCard: View {
                     .transition(.opacity)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if controller.sourceKind.supportsFraming {
+                Label("drag to pan", systemImage: "hand.draw")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.65)).padding(8)
+            }
+        }
         .overlay(alignment: .bottomLeading) { sourceActions.padding(10) }
         .overlay(alignment: .bottomTrailing) {
             DeviceFramePiP(aspect: controller.deviceAspect) {
-                SourceVisual(controller: controller, selfView: selfView)
+                RegionPreview(region: controller.region) {
+                    RawSourceView(controller: controller, selfView: selfView)
+                }
             }
             .padding(10)
             .help("How the source maps onto the selected device")
         }
         .animation(.easeInOut(duration: 0.2), value: controller.isRunning)
+    }
+
+    private var panGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard controller.sourceKind.supportsFraming else { return }
+                let start = dragStart ?? (controller.region.centerX, controller.region.centerY)
+                if dragStart == nil { dragStart = start }
+                let dx = Double(value.translation.width) / 328.0 * controller.region.zoom
+                let dy = Double(value.translation.height) / 188.0 * controller.region.zoom
+                controller.region = CropRegion(centerX: start.x - dx, centerY: start.y - dy,
+                                               zoom: controller.region.zoom, aspect: controller.region.aspect)
+            }
+            .onEnded { _ in dragStart = nil }
     }
 
     @ViewBuilder private var sourceActions: some View {
@@ -372,79 +417,6 @@ struct ViewfinderCard: View {
             }
         case .qr:
             EmptyView()
-        }
-    }
-}
-
-/// The pure pixels of the active source with the crop/fit applied — shared by the big viewfinder
-/// and the device-frame preview so both agree.
-struct SourceVisual: View {
-    @ObservedObject var controller: SessionController
-    @ObservedObject var selfView: SelfViewModel
-
-    var body: some View {
-        visual
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .animation(.easeOut(duration: 0.15), value: controller.crop)
-    }
-
-    @ViewBuilder private var visual: some View {
-        switch controller.sourceKind {
-        case .image:
-            if controller.imagePath.isEmpty {
-                TestPatternView()
-            } else if let image = controller.previewImage {
-                framed(image)
-            } else {
-                Color.black
-            }
-        case .webcam:
-            if selfView.authorization == .authorized {
-                CameraPreview(session: selfView.session)
-            } else {
-                Color.black.overlay(Image(systemName: "web.camera").font(.title).foregroundStyle(.white.opacity(0.4)))
-            }
-        case .video:
-            Color.black.overlay(
-                VStack(spacing: 6) {
-                    Image(systemName: "film").font(.system(size: 26)).foregroundStyle(.white.opacity(0.5))
-                    if !controller.videoPath.isEmpty {
-                        Text((controller.videoPath as NSString).lastPathComponent)
-                            .font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(1).padding(.horizontal, 20)
-                    }
-                }
-            )
-        case .qr:
-            if let qr = QRThumbnail.render(controller.qrText), !controller.qrText.isEmpty {
-                Color(white: 0.96).overlay(
-                    Image(nsImage: qr).resizable().interpolation(.none).scaledToFit().padding(8)
-                )
-            } else {
-                Color(white: 0.96).overlay(Image(systemName: "qrcode").font(.title).foregroundStyle(.black.opacity(0.25)))
-            }
-        }
-    }
-
-    @ViewBuilder private func framed(_ nsImage: NSImage) -> some View {
-        if controller.crop.fill {
-            GeometryReader { geo in
-                let frame = geo.size
-                let imageAspect = nsImage.size.width / max(nsImage.size.height, 1)
-                let frameAspect = frame.width / max(frame.height, 1)
-                let scaledWidth = imageAspect > frameAspect ? frame.height * imageAspect : frame.width
-                let scaledHeight = imageAspect > frameAspect ? frame.height : frame.width / imageAspect
-                let slackX = max(0, scaledWidth - frame.width)
-                let slackY = max(0, scaledHeight - frame.height)
-                Image(nsImage: nsImage).resizable()
-                    .frame(width: scaledWidth, height: scaledHeight)
-                    .offset(x: -CGFloat(controller.crop.panX) * slackX / 2,
-                            y: -CGFloat(controller.crop.panY) * slackY / 2)
-                    .frame(width: frame.width, height: frame.height)
-                    .clipped()
-            }
-        } else {
-            Image(nsImage: nsImage).resizable().aspectRatio(contentMode: .fit)
         }
     }
 }
