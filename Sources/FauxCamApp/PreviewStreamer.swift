@@ -16,6 +16,27 @@ private final class CropHolder: @unchecked Sendable {
     }
 }
 
+/// Carries a `CGImage` across the actor boundary from the off-main render task to the main actor. A
+/// `CGImage` is an immutable Core Foundation value, so sharing the reference between threads is safe.
+private struct CGImageBox: @unchecked Sendable {
+    let image: CGImage
+}
+
+/// Builds a `CGImage` from a BGRA `Frame`. This allocates and copies the pixels, so it runs OFF the
+/// main actor (inside the render task) — doing it on main starved zoom/drag gestures and stuttered.
+private func makeCGImageBox(from frame: Frame) -> CGImageBox? {
+    var pixels = frame.pixels
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+    return pixels.withUnsafeMutableBytes { raw -> CGImageBox? in
+        guard let context = CGContext(
+            data: raw.baseAddress, width: frame.width, height: frame.height,
+            bitsPerComponent: 8, bytesPerRow: frame.bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo
+        ), let image = context.makeImage() else { return nil }
+        return CGImageBox(image: image)
+    }
+}
+
 @MainActor
 final class PreviewStreamer: ObservableObject {
     /// The source at its OWN aspect (the main viewfinder), and at the SELECTED DEVICE's aspect — the
@@ -31,6 +52,11 @@ final class PreviewStreamer: ObservableObject {
     private var deviceAspect: Double = 9.0 / 19.5
     private var timer: Timer?
     private var pulling = false
+
+    /// Render long-sides: the main viewfinder is shown large; the device PiP sits in an ~84pt bezel, so
+    /// rendering it at the full preview size is wasted pixel work that adds to each tick's cost.
+    private static let previewLongSide = 480.0
+    private static let devicePreviewLongSide = 180.0
 
     func setCrop(_ region: CropRegion) { cropHolder.value = region }
 
@@ -71,23 +97,32 @@ final class PreviewStreamer: ObservableObject {
     private func tick() {
         guard let source, !pulling else { return }
         pulling = true
-        let naturalDemand = demand(forAspect: source.naturalAspect)
-        let deviceDemand = demand(forAspect: deviceAspect)
+        let naturalDemand = demand(forAspect: source.naturalAspect, longSide: Self.previewLongSide)
+        let deviceDemand = demand(forAspect: deviceAspect, longSide: Self.devicePreviewLongSide)
         Task.detached(priority: .userInitiated) {
             // Natural first: for video it decodes the frame; the device pull then reuses that same
             // frame (within the source's reuse window) so the video doesn't advance twice per tick.
             let naturalFrame = try? source.frame(satisfying: naturalDemand)
             let deviceFrame = try? source.frame(satisfying: deviceDemand)
+            // Build the CGImages off-main (allocation + pixel copy) so gestures stay smooth; only the
+            // cheap NSImage wrap hops back to the main actor.
+            let naturalBox = naturalFrame.flatMap(makeCGImageBox)
+            let deviceBox = deviceFrame.flatMap(makeCGImageBox)
             await MainActor.run {
                 self.pulling = false
-                if let naturalFrame { self.sourceImage = PreviewStreamer.image(from: naturalFrame) }
-                if let deviceFrame { self.deviceImage = PreviewStreamer.image(from: deviceFrame) }
+                if let naturalBox {
+                    self.sourceImage = NSImage(cgImage: naturalBox.image,
+                                               size: NSSize(width: naturalBox.image.width, height: naturalBox.image.height))
+                }
+                if let deviceBox {
+                    self.deviceImage = NSImage(cgImage: deviceBox.image,
+                                               size: NSSize(width: deviceBox.image.width, height: deviceBox.image.height))
+                }
             }
         }
     }
 
-    private func demand(forAspect aspect: Double) -> Demand {
-        let longSide = 480.0
+    private func demand(forAspect aspect: Double, longSide: Double) -> Demand {
         let safeAspect = aspect > 0 ? aspect : 16.0 / 9.0
         let width: Int, height: Int
         if safeAspect >= 1 {
@@ -99,17 +134,4 @@ final class PreviewStreamer: ObservableObject {
     }
 
     private func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
-
-    static func image(from frame: Frame) -> NSImage? {
-        var pixels = frame.pixels
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmap = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        return pixels.withUnsafeMutableBytes { raw -> NSImage? in
-            guard let context = CGContext(
-                data: raw.baseAddress, width: frame.width, height: frame.height,
-                bitsPerComponent: 8, bytesPerRow: frame.bytesPerRow, space: colorSpace, bitmapInfo: bitmap
-            ), let cgImage = context.makeImage() else { return nil }
-            return NSImage(cgImage: cgImage, size: NSSize(width: frame.width, height: frame.height))
-        }
-    }
 }
