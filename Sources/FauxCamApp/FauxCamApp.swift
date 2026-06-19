@@ -29,8 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] onboarded in if onboarded { self?.devicesChanged(self?.controller.devices ?? []) } }
             .store(in: &cancellables)
 
-        let timer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.controller.refresh() }
+        let timer = Timer(timeInterval: 4.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.controller.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer

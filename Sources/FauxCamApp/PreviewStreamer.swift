@@ -78,8 +78,9 @@ final class PreviewStreamer: ObservableObject {
 
     func start() {
         guard timer == nil else { return }
-        let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24.0, repeats: true) { [weak self] _ in
-            self?.tick()
+        let timer = Timer(timeInterval: 1.0 / 24.0, repeats: true) { [weak self] _ in
+            // The timer is added to the main run loop, so this fires on the main actor.
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer

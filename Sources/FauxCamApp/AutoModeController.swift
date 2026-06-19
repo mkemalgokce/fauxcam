@@ -2,16 +2,18 @@ import SwiftUI
 import FauxDomain
 import FauxAdapters
 
-/// Drives auto-injection: sets DYLD_INSERT_LIBRARIES (and the frame size matching THAT simulator's
-/// screen) in each booted simulator's launchd, so every app it launches — tapped open or run from
-/// Xcode — loads the guest dylib and serves frames at the device's own aspect. The env touches no host
-/// file and is unset on toggle-off and on quit (and clears on sim reboot), so it never lingers.
+/// Drives auto-injection via TWO vectors so every simulator app loads the guest dylib regardless of how
+/// it was launched: `SimEnvInjector` sets DYLD_INSERT_LIBRARIES in each booted simulator's launchd (covers
+/// apps you TAP open), and `LldbInjectionInstaller` adds a bracketed hook to `~/.lldbinit-Xcode` (covers
+/// apps you RUN FROM XCODE, which don't inherit the launchd env). Neither leaves anything behind: the
+/// launchd env clears on sim reboot and is unset on quit; the lldbinit block is removed on quit/leftover.
 @MainActor
 final class AutoModeController: ObservableObject {
     @Published private(set) var isActive = false
     @Published var lastError: String?
 
     private let injector: SimEnvInjector
+    private let lldbInjector: LldbInjectionInstaller
     private let aspectProvider: DeviceScreenAspectProviding
     private var server: AutoInjectionServer?
     private var injectedUDIDs: Set<String> = []
@@ -20,6 +22,7 @@ final class AutoModeController: ObservableObject {
     init(dylibPath: String = SessionController.defaultDylibPath(),
          aspectProvider: DeviceScreenAspectProviding = SimctlScreenshotAspectProvider()) {
         self.injector = SimEnvInjector(dylibPath: dylibPath)
+        self.lldbInjector = LldbInjectionInstaller(dylibPath: dylibPath)
         self.aspectProvider = aspectProvider
     }
 
@@ -33,6 +36,7 @@ final class AutoModeController: ObservableObject {
             injectedUDIDs = Set(deviceUDIDs)
             isActive = true
             lastError = deviceUDIDs.isEmpty ? "No booted simulators — boot one, then re-toggle." : nil
+            installXcodeHook()
             injectPerSim(deviceUDIDs)
         } catch {
             lastError = String(describing: error)
@@ -40,6 +44,13 @@ final class AutoModeController: ObservableObject {
             server = nil
             isActive = false
         }
+    }
+
+    /// Installs the lldbinit hook so apps RUN FROM XCODE also load the guest (launchctl only reaches
+    /// apps tapped open in the simulator). Non-fatal: if it can't be installed, tap-launch still works.
+    private func installXcodeHook() {
+        do { try lldbInjector.install() }
+        catch { lastError = "Xcode-run injection unavailable: \(error)" }
     }
 
     /// Re-applies injection to simulators booted after auto-mode was turned on (and forgets ones that
@@ -91,33 +102,38 @@ final class AutoModeController: ObservableObject {
         server?.stop()
         server = nil
         injector.uninstall(fromDevices: Array(injectedUDIDs))
+        lldbInjector.uninstall()
         injectedUDIDs = []
         isActive = false
     }
 
-    /// Synchronous teardown for app termination so the injected env is unset before the process exits.
+    /// Synchronous teardown for app termination so both vectors are removed before the process exits.
     func cleanupForQuit() {
         server?.stop()
         server = nil
         injector.uninstall(fromDevices: Array(injectedUDIDs))
+        lldbInjector.uninstall()
         injectedUDIDs = []
     }
 
-    /// Clears injection a previous run left behind (crash / force-quit) — only where libFaux is the
-    /// injected dylib, never a user's own DYLD_INSERT. Runs at launch when auto-mode is off.
+    /// Clears injection a previous run left behind (crash / force-quit): the launchd env (only where
+    /// libFaux is the injected dylib, never a user's own DYLD_INSERT) and the lldbinit hook. Runs at
+    /// launch when auto-mode is off — a fresh enable then re-installs with the current dylib path.
     func cleanLeftoverInjection(deviceUDIDs: [String]) {
         guard !isActive else { return }
         let leftover = injector.leftoverDevices(among: deviceUDIDs)
         if !leftover.isEmpty { injector.uninstall(fromDevices: leftover) }
+        if lldbInjector.isInstalled { lldbInjector.uninstall() }
     }
 
     /// Full cleanup: stop the server, unset DYLD on every device we touched OR that still has a
-    /// leftover, and delete stale sockets.
+    /// leftover, remove the lldbinit hook, and delete stale sockets.
     func reset(deviceUDIDs: [String]) {
         server?.stop()
         server = nil
         let toClean = injectedUDIDs.union(injector.leftoverDevices(among: deviceUDIDs))
         injector.uninstall(fromDevices: Array(toClean))
+        lldbInjector.uninstall()
         injectedUDIDs = []
         isActive = false
         lastError = nil

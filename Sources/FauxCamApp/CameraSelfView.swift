@@ -16,7 +16,7 @@ final class CameraAuthorization: ObservableObject {
         if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
             _ = await AVCaptureDevice.requestAccess(for: .video)
         }
-        refresh()
+        await MainActor.run { refresh() }
     }
 
     func openSystemSettings() {
