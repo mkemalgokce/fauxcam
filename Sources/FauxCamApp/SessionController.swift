@@ -109,12 +109,18 @@ final class SessionController: ObservableObject {
         }
     }
 
+    /// Called every poll (~4s). Only touches @Published state and re-fetches the (screenshot-derived)
+    /// aspect when something ACTUALLY changed — re-screenshotting every poll pegged the simulator and
+    /// froze the app over a long session.
     private func applyDevices(_ devices: [SimDevice]) {
-        self.devices = devices
+        let previousSelected = selectedUDID
+        if devices != self.devices { self.devices = devices }
         if devices.first(where: { $0.udid == selectedUDID }) == nil {
             selectedUDID = devices.first?.udid ?? ""
         }
-        refreshDeviceAspect(forceRefetch: true)
+        if selectedUDID != previousSelected, !selectedUDID.isEmpty {
+            refreshDeviceAspect()
+        }
     }
 
     func selectDevice(_ udid: String) {
