@@ -23,8 +23,8 @@ struct SourceTabBar: View {
     }
 
     var body: some View {
-        GlassEffectContainer {
-            HStack(spacing: 4) {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
                 ForEach(SourceTab.allCases) { tabButton($0) }
             }
         }
