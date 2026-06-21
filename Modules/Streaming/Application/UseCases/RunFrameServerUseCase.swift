@@ -20,6 +20,7 @@ public struct RunFrameServerUseCase: Sendable {
                 let source = source, pool = pool
                 group.addTask {
                     await ServeFramesUseCase(source: source, transport: transport, pool: pool).run()
+                    transport.close()
                 }
             }
         }
