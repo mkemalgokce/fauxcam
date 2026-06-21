@@ -29,7 +29,6 @@ public struct ByteWriter: Sendable {
     public mutating func put(_ v: UInt32) { for i in 0..<4 { bytes.append(UInt8(v >> (8*i) & 0xff)) } }
     public mutating func put(_ v: UInt64) { for i in 0..<8 { bytes.append(UInt8(v >> (8*UInt64(i)) & 0xff)) } }
     public mutating func put(contentsOf raw: UnsafeRawBufferPointer) { bytes.append(contentsOf: raw) }
-    public mutating func put(contentsOf other: [UInt8]) { bytes.append(contentsOf: other) }
 }
 
 /// Minimal little-endian reader over a byte slice. Throws on underrun.

@@ -26,25 +26,26 @@ public struct WireCodec: Sendable {
         return Demand(position: CameraPosition(wire: position), requestedWidth: Int(width), requestedHeight: Int(height))
     }
 
-    /// Encode a full FRAME message (header + 36-byte frame header + payload) ready to write.
+    /// Encode a full FRAME message (header + 36-byte frame header + payload) in ONE pre-reserved pass —
+    /// the multi-MB payload is copied exactly once. `bodyLength` is computed from the bytes the strategy
+    /// actually emits (`frame.buffer.count`), so the header length stays correct.
     public func encodeFrame(_ frame: Frame, sequence: UInt32) -> [UInt8] {
-        var body = ByteWriter(reservingCapacity: Wire.frameHeaderByteCount + frame.byteCount)
-        body.put(frame.position.wireValue)
-        body.put(sequence)
-        body.put(frame.presentationTimeNanoseconds)
-        body.put(UInt32(frame.width))
-        body.put(UInt32(frame.height))
-        body.put(UInt32(frame.bytesPerRow))
-        body.put(encoding.wirePixelFormat)
-        body.put(UInt32(frame.buffer.count))
-        encoding.encodePayload(of: frame, into: &body)
-
-        var out = ByteWriter(reservingCapacity: Wire.headerByteCount + body.bytes.count)
+        let payloadByteCount = frame.buffer.count
+        let bodyLength = Wire.frameHeaderByteCount + payloadByteCount
+        var out = ByteWriter(reservingCapacity: Wire.headerByteCount + bodyLength)
         out.put(Wire.magic)
         out.put(Wire.version)
         out.put(Wire.MessageType.frame.rawValue)
-        out.put(UInt32(body.bytes.count))
-        out.put(contentsOf: body.bytes)
+        out.put(UInt32(bodyLength))
+        out.put(frame.position.wireValue)
+        out.put(sequence)
+        out.put(frame.presentationTimeNanoseconds)
+        out.put(UInt32(frame.width))
+        out.put(UInt32(frame.height))
+        out.put(UInt32(frame.bytesPerRow))
+        out.put(encoding.wirePixelFormat)
+        out.put(UInt32(payloadByteCount))
+        encoding.encodePayload(of: frame, into: &out)
         return out.bytes
     }
 }
