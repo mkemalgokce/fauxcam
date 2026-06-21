@@ -14,9 +14,9 @@ struct RunFrameServerUseCaseTests {
         let t3 = FakeTransport(demands: demands(3))
         let server = FakeFrameServer(transports: [t1, t2, t3])
         await RunFrameServerUseCase(server: server, source: FakeProducer(pool: pool), pool: pool).run()
-        #expect(t1.sent.count == 1)
-        #expect(t2.sent.count == 2)
-        #expect(t3.sent.count == 3)
+        let s1 = await t1.sent; #expect(s1.count == 1)
+        let s2 = await t2.sent; #expect(s2.count == 2)
+        let s3 = await t3.sent; #expect(s3.count == 3)
     }
 
     @Test func returnsWhenNoClients() async {

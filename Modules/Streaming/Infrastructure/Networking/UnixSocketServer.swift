@@ -1,14 +1,16 @@
 import Foundation
+import os
 import Kernel
 import Darwin
 
 /// `FrameServing` over an AF_UNIX listening socket. Binds `path`, accepts on a dedicated thread, and
-/// yields one `UnixSocketTransport` per connection through the `clients()` AsyncStream.
-public final class UnixSocketServer: FrameServing, @unchecked Sendable {
+/// yields one `UnixSocketTransport` per connection through the `clients()` AsyncStream. The only mutable
+/// state (the listen fd) lives in an `OSAllocatedUnfairLock` — the modern, Sendable value-holding lock —
+/// so the type is plain `Sendable`, no `@unchecked` and no `NSLock`.
+public final class UnixSocketServer: FrameServing, Sendable {
     private let path: String
     private let codec: WireCodec
-    private let lock = NSLock()
-    private var listenFD: Int32 = -1
+    private let listenFD = OSAllocatedUnfairLock<Int32>(initialState: -1)
 
     public init(path: String, codec: WireCodec = WireCodec()) {
         self.path = path
@@ -19,14 +21,14 @@ public final class UnixSocketServer: FrameServing, @unchecked Sendable {
         AsyncStream { continuation in
             let fd: Int32
             do { fd = try bindAndListen() } catch { continuation.finish(); return }
-            lock.withLock { listenFD = fd }
+            listenFD.withLock { $0 = fd }
             continuation.onTermination = { [weak self] _ in self?.stop() }
-            Thread.detachNewThread { [weak self] in
-                guard let self else { return }
+            let codec = self.codec
+            Thread.detachNewThread {
                 while true {
                     let client = accept(fd, nil, nil)
                     if client < 0 { break }
-                    continuation.yield(UnixSocketTransport(fileDescriptor: client, codec: self.codec))
+                    continuation.yield(UnixSocketTransport(fileDescriptor: client, codec: codec))
                 }
                 continuation.finish()
             }
@@ -34,7 +36,9 @@ public final class UnixSocketServer: FrameServing, @unchecked Sendable {
     }
 
     public func stop() {
-        let fd = lock.withLock { () -> Int32 in let f = listenFD; listenFD = -1; return f }
+        let fd = listenFD.withLock { (state: inout Int32) -> Int32 in
+            let current = state; state = -1; return current
+        }
         if fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
         unlink(path)
     }

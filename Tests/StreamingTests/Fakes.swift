@@ -1,37 +1,32 @@
 import Kernel
 import Streaming
-import Foundation
 
-/// In-memory transport: replays a fixed demand list, records sent frames. No sockets.
-final class FakeTransport: FrameTransporting, @unchecked Sendable {
-    let demands: AsyncStream<Demand>
-    private let lock = NSLock()
-    private var _sent: [Frame] = []
-    var sent: [Frame] { lock.withLock { _sent } }
+/// In-memory transport: replays a fixed demand list, records sent frames. An actor — no locks.
+actor FakeTransport: FrameTransporting {
+    nonisolated let demands: AsyncStream<Demand>
+    private(set) var sent: [Frame] = []
     init(demands list: [Demand]) {
         demands = AsyncStream { cont in
             for d in list { cont.yield(d) }
             cont.finish()
         }
     }
-    func send(_ frame: Frame) async throws { lock.withLock { _sent.append(frame) } }
-    func close() {}
+    func send(_ frame: Frame) async throws { sent.append(frame) }
+    nonisolated func close() {}
 }
 
-/// Transport whose send always throws — to prove the pump keeps draining despite send failures.
-final class ThrowingSendTransport: FrameTransporting, @unchecked Sendable {
-    let demands: AsyncStream<Demand>
-    private let lock = NSLock()
-    private var _attempted = 0
-    var attempted: Int { lock.withLock { _attempted } }
+/// Transport whose send always throws — proves the pump keeps draining despite send failures.
+actor ThrowingSendTransport: FrameTransporting {
+    nonisolated let demands: AsyncStream<Demand>
+    private(set) var attempted = 0
     init(demands list: [Demand]) {
         demands = AsyncStream { cont in
             for d in list { cont.yield(d) }
             cont.finish()
         }
     }
-    func send(_ frame: Frame) async throws { lock.withLock { _attempted += 1 }; throw WireError.truncated }
-    func close() {}
+    func send(_ frame: Frame) async throws { attempted += 1; throw WireError.truncated }
+    nonisolated func close() {}
 }
 
 /// Producer that fills a pooled buffer with the demanded size.
@@ -47,7 +42,7 @@ struct FakeProducer: FrameProducing {
     }
 }
 
-/// Producer that always throws — to prove a failed produce skips the frame.
+/// Producer that always throws — proves a failed produce skips the frame.
 struct ThrowingProducer: FrameProducing {
     var naturalAspect: Double { 1 }
     func frame(for demand: Demand) async throws -> Frame { throw WireError.malformed }

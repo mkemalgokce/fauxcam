@@ -1,51 +1,55 @@
 import Foundation
+import Dispatch
 import Kernel
 import Darwin
 
-/// ADAPTER: presents a connected AF_UNIX socket fd as a `FrameTransporting`. Incoming wire messages are
-/// read on a dedicated thread (blocking reads stay OFF the Swift cooperative pool) and surfaced as the
-/// `demands` AsyncStream; `send` serializes encoded frames onto an I/O queue. Full-duplex: read + write
-/// on the same fd run on different threads, which is safe.
-public final class UnixSocketTransport: FrameTransporting, @unchecked Sendable {
+/// ADAPTER: a connected AF_UNIX socket fd presented as a `FrameTransporting`. Modern concurrency, no
+/// locks: the transport is an `actor` pinned to a dedicated serial executor (a `DispatchSerialQueue`),
+/// so `send` and the `sequence` counter are actor-isolated and the blocking write runs OFF the Swift
+/// cooperative pool (per SE-0424 custom executors). Incoming messages are read on one dedicated thread
+/// (blocking reads must not share the send executor) and surfaced as the `demands` AsyncStream.
+public actor UnixSocketTransport: FrameTransporting {
     private let fd: Int32
     private let codec: WireCodec
-    public let demands: AsyncStream<Demand>
-    private let continuation: AsyncStream<Demand>.Continuation
-    private let ioQueue = DispatchQueue(label: "com.fauxcam.streaming.socket-io")
-    private var sequence: UInt32 = 0            // only touched on `ioQueue`
+    public nonisolated let demands: AsyncStream<Demand>
+    private nonisolated let continuation: AsyncStream<Demand>.Continuation
+    private let ioQueue: DispatchSerialQueue
+    private var sequence: UInt32 = 0
+
+    /// Pin this actor to the serial queue so isolated work (send) runs there, not on the shared pool.
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { ioQueue.asUnownedSerialExecutor() }
 
     public init(fileDescriptor: Int32, codec: WireCodec = WireCodec()) {
         fd = fileDescriptor
         self.codec = codec
+        ioQueue = DispatchSerialQueue(label: "com.fauxcam.streaming.socket-io")
         (demands, continuation) = AsyncStream.makeStream()
-        Thread.detachNewThread { [weak self] in self?.readLoop() }
+        let fd = self.fd, codec = self.codec, continuation = self.continuation
+        Thread.detachNewThread { Self.readLoop(fd: fd, codec: codec, continuation: continuation) }
     }
 
+    /// Runs on `ioQueue` (the actor's executor): a momentary blocking write off the cooperative pool.
     public func send(_ frame: Frame) async throws {
-        try await withCheckedThrowingContinuation { cont in
-            ioQueue.async { [self] in
-                sequence &+= 1
-                let bytes = codec.encodeFrame(frame, sequence: sequence)
-                if SocketIO.writeFully(fd, bytes) { cont.resume() }
-                else { cont.resume(throwing: SocketError.writeFailed) }
-            }
-        }
+        sequence &+= 1
+        let bytes = codec.encodeFrame(frame, sequence: sequence)
+        guard SocketIO.writeFully(fd, bytes) else { throw SocketError.writeFailed }
     }
 
-    public func close() {
+    public nonisolated func close() {
         continuation.finish()
         shutdown(fd, SHUT_RDWR)
         Darwin.close(fd)
     }
 
-    /// Blocking read loop on a dedicated thread: frame header -> validate -> body -> demand, skipping the
-    /// hello handshake. Any disconnect/error finishes the stream.
-    private func readLoop() {
-        while let demand = readNextDemand() { continuation.yield(demand) }
+    // MARK: - Read loop (dedicated thread; nonisolated/static so it captures no actor state)
+
+    private nonisolated static func readLoop(fd: Int32, codec: WireCodec,
+                                             continuation: AsyncStream<Demand>.Continuation) {
+        while let demand = readNextDemand(fd: fd, codec: codec) { continuation.yield(demand) }
         continuation.finish()
     }
 
-    private func readNextDemand() -> Demand? {
+    private nonisolated static func readNextDemand(fd: Int32, codec: WireCodec) -> Demand? {
         while true {
             guard let headerBytes = SocketIO.readFully(fd, count: Wire.headerByteCount),
                   let header = try? codec.parseHeader(headerBytes),
