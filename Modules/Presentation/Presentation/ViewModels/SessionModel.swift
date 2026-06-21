@@ -259,7 +259,20 @@ public final class SessionModel {
     private func poll() async {
         let booted = (try? await simulators.bootedDevices()) ?? []
         applyDevices(booted)
-        syncDevices()
+        await autoInject()
+    }
+
+    /// Auto mode (legacy behavior): every booted simulator stays injected with NO manual Start. Enables
+    /// on the first booted device, then just syncs newly-booted / shut-down sims on later ticks.
+    private func autoInject() async {
+        let udids = devices.map(\.udid)
+        if isInjecting {
+            await injection.sync(devices: udids)
+        } else if !udids.isEmpty {
+            await injection.enable(source: switchable, pool: pool, devices: udids)
+            isInjecting = true
+            lastError = nil
+        }
     }
 
     /// Updates @Observable state and re-fetches the (screenshot-derived) aspect only when something
