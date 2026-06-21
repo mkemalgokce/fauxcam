@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Foundation
 import Kernel
 import Platform
@@ -15,6 +16,8 @@ import Presentation
 struct FauxCamApp: App {
     @State private var preview: PreviewModel
     @State private var session: SessionModel
+    @State private var settings = SettingsModel()
+    private let injection: AutoInjectionService
 
     init() {
         let socketDir = "/private/tmp/com.fauxcam"
@@ -32,6 +35,7 @@ struct FauxCamApp: App {
         let server = UnixSocketServer(path: socketDir + "/auto.sock")
         let injection = AutoInjectionService(server: server, env: SimEnvInjector(runner: runner),
                                              xcode: LldbHookInstaller(), aspects: aspects, dylibPath: dylibPath)
+        self.injection = injection
 
         _preview = State(initialValue: PreviewModel(source: switchable, demand: { (220, 480) }))
         _session = State(initialValue: SessionModel(factory: factory, switchable: switchable,
@@ -43,8 +47,30 @@ struct FauxCamApp: App {
         MenuBarExtra {
             RootView(preview: preview, session: session)
         } label: {
-            Image(systemName: "camera.aperture")
+            menuBarLabel
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(settings: settings, session: session, onUninstall: uninstall)
+        }
+    }
+
+    /// The menu-bar glyph: the bundled line-art `appicon` rendered as a template, SF Symbol fallback.
+    private var menuBarLabel: some View {
+        if let url = Bundle.main.url(forResource: "appicon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            image.isTemplate = true
+            image.size = NSSize(width: 18, height: 18)
+            return AnyView(Image(nsImage: image))
+        }
+        return AnyView(Image(systemName: "camera.aperture"))
+    }
+
+    private func uninstall() {
+        Task {
+            await injection.disable()
+            await MainActor.run { NSApplication.shared.terminate(nil) }
+        }
     }
 }

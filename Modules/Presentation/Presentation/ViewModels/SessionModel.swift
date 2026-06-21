@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Observation
 import Foundation
 import Kernel
@@ -53,6 +54,32 @@ public final class SessionModel {
     public func stopPolling() { pollTask?.cancel(); pollTask = nil }
 
     public func chooseMedia(_ url: URL) { mediaURL = url; sourceKind = .media; rebuildSource() }
+
+    public var hasCustomMedia: Bool { mediaURL != nil }
+    public var mediaLabel: String { mediaURL?.lastPathComponent ?? "Test image" }
+    public func resetMedia() { mediaURL = nil; sourceKind = .media; rebuildSource() }
+
+    /// Paste from the clipboard: a file URL or image becomes the media source; plain text fills the QR field.
+    public func paste() {
+        let pasteboard = NSPasteboard.general
+        if let url = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], let first = url.first {
+            chooseMedia(first)
+        } else if sourceKind == .qr, let text = pasteboard.string(forType: .string) {
+            qrText = text
+            rebuildSource()
+        } else if let image = NSImage(pasteboard: pasteboard),
+                  let url = Self.writeTemp(image) {
+            chooseMedia(url)
+        }
+    }
+
+    private static func writeTemp(_ image: NSImage) -> URL? {
+        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fauxcam-paste.png")
+        try? png.write(to: url)
+        return url
+    }
 
     public func toggleInjection() async {
         if isInjecting {

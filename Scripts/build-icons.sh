@@ -11,13 +11,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ICONS="$ROOT/Icons"
-APP_PNG="$ICONS/appicon.png"
+APP_PNG="$ICONS/faux_logo.png"
 
 command -v iconutil >/dev/null || { echo "ERROR: iconutil missing (install Xcode Command Line Tools)"; exit 1; }
 command -v sips >/dev/null || { echo "ERROR: sips missing (install Xcode Command Line Tools)"; exit 1; }
-[ -f "$APP_PNG" ] || { echo "ERROR: $APP_PNG missing (the 1024x1024 app artwork)"; exit 1; }
+[ -f "$APP_PNG" ] || { echo "ERROR: $APP_PNG missing (faux_logo.png, the app artwork)"; exit 1; }
 
-echo "==> Building FauxCam.icns from appicon.png"
+echo "==> Building FauxCam.icns from faux_logo.png"
 ICONSET="$ICONS/FauxCam.iconset"
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"

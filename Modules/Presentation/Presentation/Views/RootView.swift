@@ -1,11 +1,11 @@
 import SwiftUI
-import AppKit
 
-/// The menu-bar panel (working core): live preview + source picker + injection status. Polish (gestures,
-/// glass, tutorial, settings, bezel) lands in later features.
+/// The menu-bar panel — legacy layout: viewfinder, glass source picker, status pill, footer. Composed
+/// from reusable components; all state lives in the view models (MVVM).
 public struct RootView: View {
     @State private var preview: PreviewModel
     @State private var session: SessionModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(preview: PreviewModel, session: SessionModel) {
         _preview = State(initialValue: preview)
@@ -14,75 +14,58 @@ public struct RootView: View {
 
     public var body: some View {
         VStack(spacing: 12) {
-            viewfinder
-            sourcePicker
-            statusBar
+            ViewfinderCard(preview: preview)
+                .padding(.horizontal, 16).padding(.top, 16)
+
+            VStack(spacing: 8) {
+                SourceTabBar(selection: $session.sourceKind)
+                sourceDetail
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: session.sourceKind)
+            }
+            .padding(.horizontal, 16)
+
+            StatusPill(isInjecting: session.isInjecting, deviceCount: session.devices.count)
+                .padding(.horizontal, 16)
+
+            injectButton.padding(.horizontal, 16)
+
+            AppFooter()
         }
-        .padding(16)
-        .frame(width: 340)
+        .frame(width: 360)
         .onAppear { preview.start(); session.startPolling() }
         .onDisappear { preview.stop(); session.stopPolling() }
     }
 
-    private var viewfinder: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14).fill(.quaternary)
-            if let image = preview.image {
-                Image(nsImage: image).resizable().scaledToFit()
-            } else {
-                ProgressView()
+    @ViewBuilder private var sourceDetail: some View {
+        switch session.sourceKind {
+        case .media:
+            MediaActions(session: session)
+        case .camera:
+            HStack {
+                Text("Your Mac camera is mirrored into the simulator.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer()
             }
-        }
-        .frame(height: 200)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(alignment: .topLeading) {
-            Text("\(preview.fps, format: .number.precision(.fractionLength(0))) fps")
-                .font(.caption2.monospacedDigit().weight(.semibold))
-                .padding(.horizontal, 7).padding(.vertical, 3)
-                .background(.black.opacity(0.5), in: Capsule()).foregroundStyle(.white)
-                .padding(8)
-        }
-    }
-
-    private var sourcePicker: some View {
-        VStack(spacing: 8) {
-            Picker("Source", selection: $session.sourceKind) {
-                Text("Media").tag(SessionModel.SourceKind.media)
-                Text("Camera").tag(SessionModel.SourceKind.camera)
-                Text("QR").tag(SessionModel.SourceKind.qr)
-            }
-            .pickerStyle(.segmented).labelsHidden()
-
-            switch session.sourceKind {
-            case .media:
-                Button("Choose Image / Video…", action: chooseMedia).frame(maxWidth: .infinity)
-            case .qr:
-                TextField("QR text", text: $session.qrText).textFieldStyle(.roundedBorder)
-            case .camera:
-                Text("Using your Mac camera").font(.caption).foregroundStyle(.secondary)
+        case .qr:
+            HStack(spacing: 6) {
+                TextField("Text or URL to encode", text: $session.qrText).textFieldStyle(.roundedBorder)
+                Button { session.paste() } label: { Label("Paste", systemImage: "clipboard") }
+                    .buttonStyle(.glass).controlSize(.small).help("Paste from clipboard")
             }
         }
     }
 
-    private var statusBar: some View {
-        HStack {
-            Circle().fill(session.isInjecting ? .green : .secondary).frame(width: 8, height: 8)
-            Text(session.isInjecting ? "Injecting · \(session.devices.count) sim\(session.devices.count == 1 ? "" : "s")"
-                                     : "\(session.devices.count) simulator\(session.devices.count == 1 ? "" : "s") booted")
-                .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Button(session.isInjecting ? "Stop" : "Start") {
-                Task { await session.toggleInjection() }
-            }
-            .controlSize(.small)
-            .disabled(!session.isInjecting && session.devices.isEmpty)
+    private var injectButton: some View {
+        Button {
+            Task { await session.toggleInjection() }
+        } label: {
+            Label(session.isInjecting ? "Stop injecting" : "Start injecting",
+                  systemImage: session.isInjecting ? "stop.fill" : "bolt.fill")
+                .frame(maxWidth: .infinity)
         }
-    }
-
-    private func chooseMedia() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, .movie]
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { session.chooseMedia(url) }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .tint(session.isInjecting ? .red : .accentColor)
+        .disabled(!session.isInjecting && session.devices.isEmpty)
     }
 }
