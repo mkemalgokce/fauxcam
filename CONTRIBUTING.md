@@ -3,6 +3,18 @@
 Thanks for your interest in improving FauxCam! Contributions of all kinds —
 bug reports, fixes, features, and docs — are welcome.
 
+## Branching model (git-flow)
+
+- **`main`** — production / released code. Never commit directly.
+- **`develop`** — integration branch for the clean-architecture rewrite; features merge here.
+- **`feature/<name>`** — branch off `develop`, merge back via PR (e.g. `feature/streaming`,
+  `feature/capture`). One feature module / concern per branch.
+- **`release/<x.y.z>`** — stabilize a release off `develop`, then merge to `main` + tag.
+- **`hotfix/<name>`** — urgent fixes off `main`, merged back to `main` and `develop`.
+
+The codebase is **feature-modular clean architecture** (`Modules/<Feature>/<Layer>/<Category>/`); see
+`docs/ARCHITECTURE.md`. The pre-rewrite code is kept under `Legacy/` for reference during migration.
+
 ## Requirements
 
 - **macOS 26** or newer (the menu bar app uses macOS 26 SwiftUI / Liquid Glass).

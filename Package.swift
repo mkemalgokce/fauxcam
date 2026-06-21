@@ -1,22 +1,40 @@
 // swift-tools-version: 6.4
 import PackageDescription
 
+// Feature-modular clean architecture. Each feature is one SPM target whose source tree is foldered by
+// layer (Domain / Data / Application / Infrastructure / Presentation), and inside each layer by the
+// classic clean-arch categories (Entities, Repositories, UseCases, DataSources, ...). Dependencies
+// point inward; the guest dylib (Guest/) is a separate driver, coupled only through Shared/faux_wire.h.
 let package = Package(
-    name: "FauxCore",
+    name: "FauxCam",
     platforms: [.macOS(.v26)],
     products: [
-        .executable(name: "faux", targets: ["faux"]),
-        .executable(name: "FauxCamApp", targets: ["FauxCamApp"])
+        .executable(name: "FauxCamApp", targets: ["FauxCamApp"]),
+        .executable(name: "faux", targets: ["FauxCLI"]),
     ],
     targets: [
-        .target(name: "FauxDomain"),
-        .target(name: "FauxApplication", dependencies: ["FauxDomain"]),
-        .target(name: "FauxAdapters", dependencies: ["FauxDomain", "FauxApplication"]),
-        .executableTarget(name: "faux", dependencies: ["FauxDomain", "FauxApplication", "FauxAdapters"]),
-        .executableTarget(name: "FauxCamApp", dependencies: ["FauxDomain", "FauxApplication", "FauxAdapters"]),
-        .testTarget(name: "FauxDomainTests", dependencies: ["FauxDomain"]),
-        .testTarget(name: "FauxApplicationTests", dependencies: ["FauxApplication", "FauxDomain"]),
-        .testTarget(name: "FauxAdaptersTests", dependencies: ["FauxAdapters", "FauxApplication", "FauxDomain"]),
-        .testTarget(name: "FauxLoaderIntegrationTests", dependencies: ["FauxDomain", "FauxApplication", "FauxAdapters"])
+        // Shared core: framework-free entities + the producer/transport ports every feature speaks.
+        .target(name: "Kernel", path: "Modules/Kernel"),
+
+        // Feature modules.
+        .target(name: "Capture", dependencies: ["Kernel"], path: "Modules/Capture"),
+        .target(name: "Streaming", dependencies: ["Kernel"], path: "Modules/Streaming"),
+        .target(name: "Simulators", dependencies: ["Kernel"], path: "Modules/Simulators"),
+        .target(name: "Injection", dependencies: ["Kernel", "Streaming", "Simulators"], path: "Modules/Injection"),
+        .target(name: "Framing", dependencies: ["Kernel"], path: "Modules/Framing"),
+        .target(name: "Diagnostics", dependencies: ["Kernel"], path: "Modules/Diagnostics"),
+
+        // Presentation (SwiftUI views + view models) sees every feature's Application/Domain.
+        .target(name: "Presentation",
+                dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Framing", "Diagnostics"],
+                path: "Modules/Presentation"),
+
+        // Composition roots.
+        .executableTarget(name: "FauxCamApp",
+                          dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Framing", "Diagnostics", "Presentation"],
+                          path: "Apps/MenuBarApp"),
+        .executableTarget(name: "FauxCLI",
+                          dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Diagnostics"],
+                          path: "Apps/CLI"),
     ]
 )
