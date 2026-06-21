@@ -24,7 +24,7 @@ let package = Package(
         .target(name: "Simulators", dependencies: ["Kernel", "Platform"], path: "Modules/Simulators"),
         .target(name: "Injection", dependencies: ["Kernel", "Platform", "Streaming", "Simulators"], path: "Modules/Injection"),
         .target(name: "Framing", dependencies: ["Kernel"], path: "Modules/Framing"),
-        .target(name: "Diagnostics", dependencies: ["Kernel"], path: "Modules/Diagnostics"),
+        .target(name: "Diagnostics", dependencies: ["Kernel", "Platform"], path: "Modules/Diagnostics"),
 
         // Presentation (SwiftUI views + view models) sees every feature's Application/Domain.
         .target(name: "Presentation",
@@ -45,5 +45,6 @@ let package = Package(
         .testTarget(name: "SimulatorsTests", dependencies: ["Simulators", "Kernel", "Platform"], path: "Tests/SimulatorsTests"),
         .testTarget(name: "InjectionTests", dependencies: ["Injection", "Kernel", "Platform", "Streaming", "Simulators"], path: "Tests/InjectionTests"),
         .testTarget(name: "FramingTests", dependencies: ["Framing", "Kernel"], path: "Tests/FramingTests"),
+        .testTarget(name: "DiagnosticsTests", dependencies: ["Diagnostics", "Platform"], path: "Tests/DiagnosticsTests"),
     ]
 )
