@@ -30,7 +30,7 @@ public final class SessionModel {
     // MARK: Source
 
     public var sourceKind: SourceKind = .image {
-        didSet { guard sourceKind != oldValue else { return }; setSourceDescriptor() }
+        didSet { guard sourceKind != oldValue else { return }; updateWebcam(from: oldValue); setSourceDescriptor() }
     }
     public var qrText: String = "" {
         didSet { guard qrText != oldValue else { return }; setSourceDescriptor() }
@@ -70,6 +70,7 @@ public final class SessionModel {
     private let aspects: any ScreenAspectResolving
     private let injection: AutoInjectionService
     private let pool: any BufferPooling
+    private let webcam: WebcamCaptureSession
 
     private var orientationCache: [String: Bool] = [:]
     private var aspectCache: [String: Double] = [:]
@@ -83,7 +84,8 @@ public final class SessionModel {
         simulators: any SimulatorRepository,
         aspects: any ScreenAspectResolving,
         injection: AutoInjectionService,
-        pool: any BufferPooling
+        pool: any BufferPooling,
+        webcam: WebcamCaptureSession
     ) {
         self.factory = factory
         self.switchable = switchable
@@ -92,8 +94,19 @@ public final class SessionModel {
         self.aspects = aspects
         self.injection = injection
         self.pool = pool
+        self.webcam = webcam
         rebuildSource()
     }
+
+    /// Start the shared webcam only while the Camera source is selected; stop it when leaving so the
+    /// camera light goes out. The session is REUSED (never recreated), which fixes the black preview on
+    /// re-selecting Camera. Re-callable on permission grant via `refreshWebcamIfActive`.
+    private func updateWebcam(from oldValue: SourceKind) {
+        if sourceKind == .webcam { webcam.start() }
+        else if oldValue == .webcam { webcam.stop() }
+    }
+
+    public func refreshWebcamIfActive() { if sourceKind == .webcam { webcam.start() } }
 
     // MARK: Computed
 

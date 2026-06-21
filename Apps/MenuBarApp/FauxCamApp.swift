@@ -84,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let pool = RecyclingBufferPool()
         let cropStore = CropStore()
-        let factory = FrameSourceFactory(pool: pool)
+        let webcam = WebcamCaptureSession()
+        let factory = FrameSourceFactory(pool: pool, webcam: webcam)
         let switchable = SwitchableFrameSource(factory.makeSource(.testImage, crop: cropStore.read))
 
         let runner = FoundationProcessRunner()
@@ -103,7 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.preview = PreviewModel(source: switchable, cropStore: cropStore,
                                     outputAspect: 9.0 / 19.5)
         self.session = SessionModel(factory: factory, switchable: switchable, cropStore: cropStore,
-                                    simulators: simulators, aspects: aspects, injection: injection, pool: pool)
+                                    simulators: simulators, aspects: aspects, injection: injection,
+                                    pool: pool, webcam: webcam)
         super.init()
     }
 

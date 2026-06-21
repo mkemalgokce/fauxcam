@@ -76,7 +76,7 @@ public struct RootView: View {
         .onChange(of: session.deviceAspect) { _, _ in deviceChanged() }
         .onChange(of: session.deviceLandscape) { _, _ in deviceChanged() }
         .onChange(of: session.region) { _, _ in preview.setCrop(session.region); session.setCrop(session.region) }
-        .onChange(of: camera.status) { _, _ in preview.rebuild(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
+        .onChange(of: camera.status) { _, _ in session.refreshWebcamIfActive(); preview.rebuild(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }

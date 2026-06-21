@@ -6,7 +6,11 @@ import Kernel
 /// with the shared CoreImage compositor + buffer pool. The only place source-kind dispatch lives.
 public struct FrameSourceFactory: FrameSourceMaking {
     private let pool: any BufferPooling
-    public init(pool: any BufferPooling) { self.pool = pool }
+    private let webcam: WebcamCaptureSession
+    public init(pool: any BufferPooling, webcam: WebcamCaptureSession = WebcamCaptureSession()) {
+        self.pool = pool
+        self.webcam = webcam
+    }
 
     public func makeSource(_ descriptor: SourceDescriptor,
                            crop: @escaping @Sendable () -> CropRegion) -> any FrameProducing & SourceMetadata {
@@ -20,7 +24,7 @@ public struct FrameSourceFactory: FrameSourceMaking {
         case .image(let url):     return StillImageContent(contentsOf: url) ?? StillImageContent(image: Self.testImage)
         case .testImage:          return StillImageContent(image: Self.testImage)
         case .video(let url):     return VideoContent(url: url)
-        case .webcam:             return WebcamContent()
+        case .webcam:             return WebcamContent(capture: webcam)
         }
     }
 
