@@ -15,11 +15,13 @@ let package = Package(
     targets: [
         // Shared core: framework-free entities + the producer/transport ports every feature speaks.
         .target(name: "Kernel", path: "Modules/Kernel"),
+        // Shared platform: subprocess running (simctl/lldb/lipo) behind a port.
+        .target(name: "Platform", path: "Modules/Platform"),
 
         // Feature modules.
         .target(name: "Capture", dependencies: ["Kernel"], path: "Modules/Capture"),
         .target(name: "Streaming", dependencies: ["Kernel"], path: "Modules/Streaming"),
-        .target(name: "Simulators", dependencies: ["Kernel"], path: "Modules/Simulators"),
+        .target(name: "Simulators", dependencies: ["Kernel", "Platform"], path: "Modules/Simulators"),
         .target(name: "Injection", dependencies: ["Kernel", "Streaming", "Simulators"], path: "Modules/Injection"),
         .target(name: "Framing", dependencies: ["Kernel"], path: "Modules/Framing"),
         .target(name: "Diagnostics", dependencies: ["Kernel"], path: "Modules/Diagnostics"),
@@ -40,5 +42,6 @@ let package = Package(
         // Tests (mirror Modules/ per feature).
         .testTarget(name: "StreamingTests", dependencies: ["Streaming", "Kernel"], path: "Tests/StreamingTests"),
         .testTarget(name: "CaptureTests", dependencies: ["Capture", "Kernel"], path: "Tests/CaptureTests"),
+        .testTarget(name: "SimulatorsTests", dependencies: ["Simulators", "Kernel", "Platform"], path: "Tests/SimulatorsTests"),
     ]
 )
