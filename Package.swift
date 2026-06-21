@@ -44,5 +44,6 @@ let package = Package(
         .testTarget(name: "CaptureTests", dependencies: ["Capture", "Kernel"], path: "Tests/CaptureTests"),
         .testTarget(name: "SimulatorsTests", dependencies: ["Simulators", "Kernel", "Platform"], path: "Tests/SimulatorsTests"),
         .testTarget(name: "InjectionTests", dependencies: ["Injection", "Kernel", "Platform", "Streaming", "Simulators"], path: "Tests/InjectionTests"),
+        .testTarget(name: "FramingTests", dependencies: ["Framing", "Kernel"], path: "Tests/FramingTests"),
     ]
 )
