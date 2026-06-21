@@ -36,5 +36,8 @@ let package = Package(
         .executableTarget(name: "FauxCLI",
                           dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Diagnostics"],
                           path: "Apps/CLI"),
+
+        // Tests (mirror Modules/ per feature).
+        .testTarget(name: "StreamingTests", dependencies: ["Streaming", "Kernel"], path: "Tests/StreamingTests"),
     ]
 )

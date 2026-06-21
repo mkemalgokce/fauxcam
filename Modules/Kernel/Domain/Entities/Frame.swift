@@ -1,11 +1,15 @@
-public struct Frame: Sendable, Equatable {
+import Foundation
+
+/// One video frame: metadata + a (poolable) pixel payload. The struct is cheap to pass; the bytes live
+/// in the reference-typed `buffer`.
+public struct Frame: @unchecked Sendable {
     public let position: CameraPosition
     public let pixelFormat: PixelFormat
     public let width: Int
     public let height: Int
     public let bytesPerRow: Int
     public let presentationTimeNanoseconds: UInt64
-    public let pixels: [UInt8]
+    public let buffer: FrameBuffer
 
     public init(
         position: CameraPosition,
@@ -14,7 +18,7 @@ public struct Frame: Sendable, Equatable {
         height: Int,
         bytesPerRow: Int,
         presentationTimeNanoseconds: UInt64,
-        pixels: [UInt8]
+        buffer: FrameBuffer
     ) {
         self.position = position
         self.pixelFormat = pixelFormat
@@ -22,15 +26,14 @@ public struct Frame: Sendable, Equatable {
         self.height = height
         self.bytesPerRow = bytesPerRow
         self.presentationTimeNanoseconds = presentationTimeNanoseconds
-        self.pixels = pixels
+        self.buffer = buffer
     }
 
     public var byteCount: Int { bytesPerRow * height }
 
     public var isWellFormed: Bool {
-        width > 0
-            && height > 0
+        width > 0 && height > 0
             && bytesPerRow >= width * pixelFormat.bytesPerPixel
-            && pixels.count == byteCount
+            && buffer.count == byteCount
     }
 }
