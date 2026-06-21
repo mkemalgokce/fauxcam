@@ -19,7 +19,8 @@ public struct FrameSourceFactory: FrameSourceMaking {
         case .qr(let text):       return QRCodeContent(text: text)
         case .image(let url):     return StillImageContent(contentsOf: url) ?? StillImageContent(image: Self.testImage)
         case .testImage:          return StillImageContent(image: Self.testImage)
-        case .video, .webcam:     return StillImageContent(image: Self.testImage)   // TODO(next): Video/Webcam
+        case .video(let url):     return VideoContent(url: url)
+        case .webcam:             return WebcamContent()
         }
     }
 
