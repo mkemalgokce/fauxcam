@@ -2,26 +2,42 @@ import Foundation
 import Observation
 import ServiceManagement
 
-/// Settings-screen state: launch-at-login (via SMAppService) plus a read-only running status mirrored
-/// from the session. @Observable, @MainActor — pure UI state, no business logic leaks in.
+/// Persistent settings: launch-at-login (via `SMAppService`) plus `hasOnboarded`/`autoFps` backed by
+/// `UserDefaults`. @Observable, @MainActor — pure UI/preferences state, no business logic.
 @MainActor
 @Observable
 public final class SettingsModel {
-    public var launchAtLogin: Bool {
-        didSet { applyLaunchAtLogin() }
+    public var autoFps: Int {
+        didSet { defaults.set(autoFps, forKey: Keys.fps) }
     }
-    public var isActive: Bool = false
+    public var hasOnboarded: Bool {
+        didSet { defaults.set(hasOnboarded, forKey: Keys.onboarded) }
+    }
+    public var launchAtLogin: Bool {
+        didSet { applyLaunchAtLogin(oldValue: oldValue) }
+    }
 
-    public init() {
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        autoFps = (defaults.object(forKey: Keys.fps) as? Int) ?? 30
+        hasOnboarded = defaults.bool(forKey: Keys.onboarded)
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
-    private func applyLaunchAtLogin() {
+    private func applyLaunchAtLogin(oldValue: Bool) {
         do {
             if launchAtLogin { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
         } catch {
-            launchAtLogin = SMAppService.mainApp.status == .enabled   // revert on failure
+            let real = SMAppService.mainApp.status == .enabled
+            if launchAtLogin != real, oldValue != real { launchAtLogin = real }
         }
+    }
+
+    private enum Keys {
+        static let fps = "fauxAutoFps"
+        static let onboarded = "fauxOnboarded"
     }
 }

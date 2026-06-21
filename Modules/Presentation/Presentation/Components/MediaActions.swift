@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// Media-source row: Choose / Paste (glass buttons) + a chip showing the current media with a reset.
+/// Media-source row (legacy `RootView.sourceDetail` `.media` case): Choose / Paste glass buttons plus a
+/// chip showing the current Media file (or "Test image") with an inline reset to the default.
 struct MediaActions: View {
     let session: SessionModel
 
@@ -13,16 +14,19 @@ struct MediaActions: View {
             Button { session.paste() } label: { Label("Paste", systemImage: "clipboard") }
                 .buttonStyle(.glass).controlSize(.small).help("Paste an image or video (⌘V)")
             Spacer(minLength: 4)
-            chip
+            mediaChip
         }
     }
 
-    private var chip: some View {
+    /// Shows the current Media file (or "Test image") with an inline button to clear back to the default.
+    private var mediaChip: some View {
         HStack(spacing: 5) {
-            Image(systemName: "photo").font(.caption2).foregroundStyle(.secondary)
+            Image(systemName: session.hasCustomMedia ? mediaIcon : "photo").font(.caption2).foregroundStyle(.secondary)
             Text(session.mediaLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             if session.hasCustomMedia {
-                Button { session.resetMedia() } label: { Image(systemName: "xmark.circle.fill") }
+                Button {
+                    session.imagePath = ""; session.videoPath = ""; session.sourceKind = .image
+                } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.tertiary).help("Reset to the test image")
             }
         }
@@ -31,10 +35,14 @@ struct MediaActions: View {
         .frame(maxWidth: 168, alignment: .trailing)
     }
 
+    private var mediaIcon: String { session.sourceKind == .video ? "film" : "photo" }
+
     private func choose() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, .movie]
+        panel.allowedContentTypes = [.image, .movie, .video, .quickTimeMovie, .mpeg4Movie]
         panel.allowsMultipleSelection = false
+        panel.prompt = "Use"
+        NSApplication.shared.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK, let url = panel.url { session.chooseMedia(url) }
     }
 }

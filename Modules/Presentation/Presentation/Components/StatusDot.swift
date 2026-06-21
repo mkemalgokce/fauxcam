@@ -1,25 +1,29 @@
 import SwiftUI
 
-/// A status dot with an optional pulsing ring (used in the panel + settings).
+/// A status dot with a soft expanding pulse when the app is actively injecting.
 struct StatusDot: View {
     let color: Color
-    var pulsing: Bool = false
-    @State private var animate = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let pulsing: Bool
+    @State private var expand = false
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .overlay {
-                if pulsing && !reduceMotion {
-                    Circle().stroke(color, lineWidth: 2)
-                        .scaleEffect(animate ? 2.2 : 1).opacity(animate ? 0 : 0.8)
-                }
+        ZStack {
+            if pulsing {
+                Circle().fill(color.opacity(0.35))
+                    .frame(width: 9, height: 9)
+                    .scaleEffect(expand ? 2.4 : 1)
+                    .opacity(expand ? 0 : 0.7)
             }
-            .onAppear {
-                guard pulsing && !reduceMotion else { return }
-                withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) { animate = true }
-            }
+            Circle().fill(color).frame(width: 9, height: 9)
+        }
+        .frame(width: 22, height: 22)
+        .onAppear { restart() }
+        .onChange(of: pulsing) { _, _ in restart() }
+    }
+
+    private func restart() {
+        expand = false
+        guard pulsing else { return }
+        withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { expand = true }
     }
 }

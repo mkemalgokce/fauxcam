@@ -1,11 +1,14 @@
 import SwiftUI
 import AppKit
 
-/// Panel footer: open Settings (the Settings scene) + Quit.
+/// Panel footer: open Settings (via the injected `onOpenSettings` closure — wired to a `Window` scene
+/// from the composition root, since `SettingsLink` is unreliable from a menu-bar agent) + Quit.
 struct AppFooter: View {
+    let onOpenSettings: () -> Void
+
     var body: some View {
         HStack {
-            SettingsLink { Label("Settings", systemImage: "gearshape") }
+            Button { onOpenSettings() } label: { Label("Settings", systemImage: "gearshape") }
                 .buttonStyle(.borderless).controlSize(.small)
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
