@@ -32,7 +32,6 @@ actor ThrowingSendTransport: FrameTransporting {
 /// Producer that fills a pooled buffer with the demanded size.
 struct FakeProducer: FrameProducing {
     let pool: any BufferPooling
-    var naturalAspect: Double { 16.0 / 9.0 }
     func frame(for demand: Demand) async throws -> Frame {
         let w = max(1, demand.requestedWidth), h = max(1, demand.requestedHeight)
         let bpr = w * PixelFormat.bgra32.bytesPerPixel
@@ -44,7 +43,6 @@ struct FakeProducer: FrameProducing {
 
 /// Producer that always throws — proves a failed produce skips the frame.
 struct ThrowingProducer: FrameProducing {
-    var naturalAspect: Double { 1 }
     func frame(for demand: Demand) async throws -> Frame { throw WireError.malformed }
 }
 
