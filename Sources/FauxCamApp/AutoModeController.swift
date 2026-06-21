@@ -63,39 +63,30 @@ final class AutoModeController: ObservableObject {
         if !newlyBooted.isEmpty { injectPerSim(Array(newlyBooted)) }
     }
 
-    /// Re-advertises one simulator's frame size (e.g. after it's selected/rotated and its aspect was
-    /// re-fetched), so apps opened on it match its preview. Already-running apps relaunch to pick it up.
+    /// Re-advertises ONE simulator's frame size at a given screen aspect (e.g. after it's selected or
+    /// its orientation toggles), so the app on it fills with the same framing as the preview. The size
+    /// is the device's SCREEN aspect — a frame at that aspect fills the device. Apps relaunch to pick up.
     func applyFrameSize(forDevice udid: String, aspect: Double) {
         guard isActive, injectedUDIDs.contains(udid) else { return }
-        let size = Self.outputSize(forAspect: aspect)
-        let injector = self.injector
-        let fps = self.fps
+        let size = OutputResolution.size(forAspect: aspect)
+        let injector = self.injector, fps = self.fps
         Task.detached { [injector, fps, udid, size] in
-            injector.setFrameSize(onDevices: [udid], width: size.0, height: size.1, fps: fps)
+            injector.setFrameSize(onDevices: [udid], width: size.width, height: size.height, fps: fps)
         }
     }
 
-    /// Off-main because each sim's aspect is read from a screenshot. Sets DYLD + that sim's own size.
+    /// Off-main because each sim's aspect is read from a screenshot. Sets DYLD + that sim's OWN screen
+    /// aspect/orientation, so a frame at that aspect fills it — each device gets its own correct feed.
     private func injectPerSim(_ udids: [String]) {
         guard !udids.isEmpty else { return }
-        let injector = self.injector
-        let provider = aspectProvider
-        let fps = self.fps
+        let injector = self.injector, provider = aspectProvider, fps = self.fps
         Task.detached { [injector, provider, fps, udids] in
             for udid in udids {
                 let aspect = provider.aspect(forDeviceWithUDID: udid) ?? (9.0 / 19.5)
-                let size = AutoModeController.outputSize(forAspect: aspect)
-                injector.install(onDevices: [udid], width: size.0, height: size.1, fps: fps)
+                let size = OutputResolution.size(forAspect: aspect)
+                injector.install(onDevices: [udid], width: size.width, height: size.height, fps: fps)
             }
         }
-    }
-
-    nonisolated static func outputSize(forAspect aspect: Double, shortSide: Int = 720) -> (Int, Int) {
-        let safe = aspect > 0 ? aspect : 9.0 / 19.5
-        func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
-        return safe >= 1
-            ? (even(Double(shortSide) * safe), shortSide)
-            : (shortSide, even(Double(shortSide) / safe))
     }
 
     func disable() {

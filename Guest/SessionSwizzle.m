@@ -27,12 +27,25 @@ static const void *kMetadataDelegateKey = &kMetadataDelegateKey;
 static const void *kMetadataQueueKey = &kMetadataQueueKey;
 static const void *kMetadataPumpKey = &kMetadataPumpKey;
 static const void *kPhotoPumpKey = &kPhotoPumpKey;
+static const void *kVideoPumpKey = &kVideoPumpKey;
+static const void *kVideoFormatKey = &kVideoFormatKey;
+static const void *kVideoSettingsKey = &kVideoSettingsKey;
+static const void *kSessionPresetKey = &kSessionPresetKey;
+static const void *kMetadataTypesKey = &kMetadataTypesKey;
+static const void *kSessionInputsKey = &kSessionInputsKey;
+static const void *kSessionOutputsKey = &kSessionOutputsKey;
+static const void *kSessionRunningKey = &kSessionRunningKey;
+
+// Installs a benign forwardInvocation/methodSignatureForSelector net on a fake class so any
+// selector with no IMP anywhere resolves to a nil/zero return instead of crashing. Defined later.
+static void fauxInstallForwardingNet(Class cls);
 
 static IMP fauxNSObjectInit;
 static IMP fauxOriginalInputInit;
-static IMP fauxOriginalAddInput;
-static IMP fauxOriginalAddOutput;
+static IMP fauxOriginalInputPorts;
 static IMP fauxOriginalPreviewSetSession;
+static IMP fauxOriginalPreviewSetSessionNoConn;
+static IMP fauxOriginalPreviewInitWithSession;
 
 static os_log_t fauxSessionLog(void) {
     static os_log_t log;
@@ -66,17 +79,15 @@ static os_log_t fauxSessionLog(void) {
 - (void)enqueue:(CMSampleBufferRef)sampleBuffer mirrored:(BOOL)mirrored {
     CALayer *preview = self.previewLayer;
     if (!preview) return;
+    if (CGRectIsEmpty(preview.bounds)) return; // layout not done yet — don't enqueue into a zero rect
     if (self.displayLayer.superlayer != preview) {
         [preview addSublayer:self.displayLayer];
     }
     self.displayLayer.frame = preview.bounds;
     self.displayLayer.transform = mirrored ? CATransform3DMakeScale(-1, 1, 1) : CATransform3DIdentity;
-    if ([preview respondsToSelector:@selector(videoGravity)]) {
-        AVLayerVideoGravity gravity = [(AVCaptureVideoPreviewLayer *)preview videoGravity];
-        if (gravity && ![self.displayLayer.videoGravity isEqualToString:gravity]) {
-            self.displayLayer.videoGravity = gravity;
-        }
-    }
+    // Always ResizeAspectFill — the real-camera default. We now inject a true camera-aspect (4:3) feed,
+    // so filling the app's preview bounds matches a physical camera regardless of the app's own gravity.
+    // (Don't adopt the app's gravity: that made the result depend on app-specific preview config.)
     if (self.displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
         [self.displayLayer flush];
     }
@@ -119,6 +130,7 @@ static Class fauxMetadataObjectClass(void) {
         class_addMethod(metadataClass, @selector(duration), (IMP)fauxMetadataDuration, timeTypes.UTF8String);
         class_addMethod(metadataClass, @selector(description), (IMP)fauxMetadataDescription, "@@:");
         objc_registerClassPair(metadataClass);
+        fauxInstallForwardingNet(metadataClass);
     });
     return metadataClass;
 }
@@ -211,6 +223,7 @@ static id fauxMakeResolvedSettings(int64_t uniqueID, int32_t width, int32_t heig
         class_addMethod(settingsClass, @selector(isRedEyeReductionEnabled), (IMP)fauxFakeBoolNo, "B@:");
         class_addMethod(settingsClass, @selector(description), (IMP)fauxResolvedDescriptionText, "@@:");
         objc_registerClassPair(settingsClass);
+        fauxInstallForwardingNet(settingsClass);
     });
     if (!settingsClass) return nil;
     id settings = class_createInstance(settingsClass, 0);
@@ -276,6 +289,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         class_addMethod(photoClass, @selector(isRawPhoto), (IMP)fauxFakeBoolNo, "B@:");
         class_addMethod(photoClass, @selector(description), (IMP)fauxPhotoDescriptionText, "@@:");
         objc_registerClassPair(photoClass);
+        fauxInstallForwardingNet(photoClass);
     });
     if (!photoClass) return nil;
     id photo = class_createInstance(photoClass, 0);
@@ -293,12 +307,14 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 @property (nonatomic, strong) id captureOutput;
 @property (nonatomic, strong) id captureConnection;
 @property (nonatomic) BOOL frontCamera;
+@property (nonatomic) OSType requestedPixelFormat; // 0 = BGRA default
 - (void)start;
 - (void)startIfReady;
 - (void)stop;
 - (void)registerPreviewLayer:(CALayer *)previewLayer;
 - (void)registerMetadataDelegate:(id)delegate queue:(dispatch_queue_t)queue output:(id)output connection:(id)connection;
 - (void)markPhotoConsumer;
+- (void)detachOutput:(id)output;
 - (CVPixelBufferRef)copyLatestImageBuffer CF_RETURNS_RETAINED;
 @end
 
@@ -311,6 +327,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     uint32_t _sequence;
     faux_frame_client *_frameClient;
     BOOL _usesHostSocket;
+    int _hostFailures;
     BOOL _startRequested;
     BOOL _loggedPreviewDelivery;
     BOOL _loggedMetadataDelivery;
@@ -321,6 +338,18 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     CVPixelBufferRef _latestImageBuffer;
     NSMutableArray<FauxPreviewTarget *> *_previewTargets;
     NSMutableArray<FauxMetadataTarget *> *_metadataTargets;
+}
+
+// All native pump state (_sourcePixels, _frameClient, _bufferFactory, _timer, frame dims) is
+// mutated and read ONLY on _pumpQueue, which is created eagerly so start/stop/deliver can never
+// race on it. Consumer arrays use @synchronized(self). _latestImageBuffer uses @synchronized(self)
+// because photo capture pulls it from an unrelated background queue.
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _pumpQueue = dispatch_queue_create("com.fauxcam.pump", DISPATCH_QUEUE_SERIAL);
+    }
+    return self;
 }
 
 - (void)registerPreviewLayer:(CALayer *)previewLayer {
@@ -354,7 +383,31 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     [self startIfReady];
 }
 
-- (void)markPhotoConsumer { _hasPhotoConsumer = YES; [self startIfReady]; }
+// Detach a removed output so the pump stops feeding it (camera-switch / remove-readd flows).
+- (void)detachOutput:(id)output {
+    if (!output) return;
+    @synchronized(self) {
+        if (self.captureOutput == output) {
+            self.captureOutput = nil;
+            self.sampleBufferDelegate = nil;
+            self.deliveryQueue = nil;
+        }
+        if (_metadataTargets.count) {
+            NSMutableArray *keep = [NSMutableArray array];
+            for (FauxMetadataTarget *t in _metadataTargets) {
+                if (t.output != output) [keep addObject:t];
+            }
+            _metadataTargets = keep;
+        }
+    }
+}
+
+- (void)markPhotoConsumer {
+    dispatch_async(_pumpQueue, ^{
+        self->_hasPhotoConsumer = YES;
+        [self startOnQueueIfReady];
+    });
+}
 
 - (BOOL)hasConsumer {
     if ((self.sampleBufferDelegate && self.deliveryQueue) || _hasPhotoConsumer) return YES;
@@ -402,11 +455,19 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 }
 
 - (void)start {
-    _startRequested = YES;
-    [self startIfReady];
+    dispatch_async(_pumpQueue, ^{
+        self->_startRequested = YES;
+        [self startOnQueueIfReady];
+    });
 }
 
 - (void)startIfReady {
+    dispatch_async(_pumpQueue, ^{ [self startOnQueueIfReady]; });
+}
+
+// Runs only on _pumpQueue, so it is serialized against deliverFrame and stop; no extra lock
+// needed for _sourcePixels/_frameClient/_timer.
+- (void)startOnQueueIfReady {
     if (_timer || !_startRequested || ![self hasConsumer]) return;
 
     if (_sourcePixels) { free(_sourcePixels); _sourcePixels = NULL; }
@@ -416,14 +477,12 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     _frameHeight = faux_config_height();
     _framesPerSecond = faux_config_fps();
 
-    _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:_frameWidth height:_frameHeight framesPerSecond:_framesPerSecond];
+    OSType outputFormat = self.requestedPixelFormat ?: kCVPixelFormatType_32BGRA;
+    _bufferFactory = [[FauxBufferFactory alloc] initWithWidth:_frameWidth height:_frameHeight framesPerSecond:_framesPerSecond pixelFormat:outputFormat];
     if (!_bufferFactory) return;
     [self buildSourcePixels];
     [self connectHostSocket];
 
-    if (!_pumpQueue) {
-        _pumpQueue = dispatch_queue_create("com.fauxcam.pump", DISPATCH_QUEUE_SERIAL);
-    }
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _pumpQueue);
     uint64_t interval = (uint64_t)NSEC_PER_SEC / (uint64_t)_framesPerSecond;
     dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), interval, interval / 10);
@@ -434,21 +493,11 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 }
 
 - (void)stop {
-    _startRequested = NO;
-    _hasPhotoConsumer = NO;
-    if (_timer) {
-        dispatch_source_cancel(_timer);
-        _timer = nil;
-    }
     NSArray<FauxPreviewTarget *> *targets;
     @synchronized(self) {
         targets = [_previewTargets copy];
         [_previewTargets removeAllObjects];
         [_metadataTargets removeAllObjects];
-        if (_latestImageBuffer) {
-            CVPixelBufferRelease(_latestImageBuffer);
-            _latestImageBuffer = NULL;
-        }
     }
     if (targets.count > 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -457,6 +506,25 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
             }
         });
     }
+    // Tear down native state on _pumpQueue so it serializes against deliverFrame/startOnQueueIfReady.
+    dispatch_async(_pumpQueue, ^{
+        self->_startRequested = NO;
+        self->_hasPhotoConsumer = NO;
+        if (self->_timer) {
+            dispatch_source_cancel(self->_timer);
+            self->_timer = nil;
+        }
+        if (self->_frameClient) {
+            faux_frame_client_destroy(self->_frameClient);
+            self->_frameClient = NULL;
+        }
+        @synchronized(self) {
+            if (self->_latestImageBuffer) {
+                CVPixelBufferRelease(self->_latestImageBuffer);
+                self->_latestImageBuffer = NULL;
+            }
+        }
+    });
 }
 
 - (void)buildSourcePixels {
@@ -500,16 +568,30 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
     }
 }
 
-- (void)deliverHostFrame {
-    if (faux_frame_client_send_demand(_frameClient, FAUX_POSITION_BACK, (uint32_t)_frameWidth, (uint32_t)_frameHeight, (uint32_t)_framesPerSecond, FAUX_PIXEL_FORMAT_BGRA32) != 0) {
+// A single slow/missed host frame must NOT permanently kill host video; only give up after many
+// consecutive failures (host really gone). Each failed tick still shows a synthetic frame.
+- (void)hostFrameFailed {
+    _hostFailures++;
+    if (_hostFailures >= 30) {
         [self handleHostSocketFailure];
+        _hostFailures = 0;
+    }
+    [self deliverSyntheticFrame];
+}
+
+- (void)deliverHostFrame {
+    if (!_frameClient) { [self deliverSyntheticFrame]; return; }
+    uint32_t position = self.frontCamera ? FAUX_POSITION_FRONT : FAUX_POSITION_BACK;
+    if (faux_frame_client_send_demand(_frameClient, position, (uint32_t)_frameWidth, (uint32_t)_frameHeight, (uint32_t)_framesPerSecond, FAUX_PIXEL_FORMAT_BGRA32) != 0) {
+        [self hostFrameFailed];
         return;
     }
     faux_received_frame received;
     if (faux_frame_client_recv_frame(_frameClient, &received) != 0) {
-        [self handleHostSocketFailure];
+        [self hostFrameFailed];
         return;
     }
+    _hostFailures = 0;
     CMSampleBufferRef sampleBuffer = NULL;
     if (received.payload) {
         sampleBuffer = [_bufferFactory newSampleBufferFromBGRABytes:received.payload
@@ -558,11 +640,19 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         }
     }
 
-    id delegate = self.sampleBufferDelegate;
-    dispatch_queue_t queue = self.deliveryQueue;
+    // Consistent snapshot of the delivery quartet + mirroring under one lock; these are written
+    // from setSampleBufferDelegate:queue:/addOutput: on the app's thread.
+    id delegate, output, connection;
+    dispatch_queue_t queue;
+    BOOL mirrored;
+    @synchronized(self) {
+        delegate = self.sampleBufferDelegate;
+        queue = self.deliveryQueue;
+        output = self.captureOutput;
+        connection = self.captureConnection;
+        mirrored = self.frontCamera;
+    }
     if (delegate && queue) {
-        id output = self.captureOutput;
-        id connection = self.captureConnection;
         CFRetain(sampleBuffer);
         dispatch_async(queue, ^{
             ((void (*)(id, SEL, id, CMSampleBufferRef, id))objc_msgSend)(
@@ -572,7 +662,7 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
         });
     }
 
-    if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets mirrored:self.frontCamera];
+    if (previewTargets) [self deliverToPreviewLayers:sampleBuffer targets:previewTargets mirrored:mirrored];
     [self scanMetadataIfNeeded];
 }
 
@@ -606,7 +696,12 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 }
 
 - (void)dealloc {
-    [self stop];
+    // Refcount is 0: no other thread holds the pump, so tear down synchronously (no dispatch/[self stop]
+    // which would resurrect self). The timer block holds only a weak ref.
+    if (_timer) {
+        dispatch_source_cancel(_timer);
+        _timer = nil;
+    }
     if (_sourcePixels) free(_sourcePixels);
     if (_frameClient) faux_frame_client_destroy(_frameClient);
     if (_latestImageBuffer) CVPixelBufferRelease(_latestImageBuffer);
@@ -619,39 +714,93 @@ static id fauxMakePhoto(CVPixelBufferRef buffer, id resolvedSettings) {
 static long fauxConnectionVideoOrientation(id self, SEL _cmd) { return 1; }
 static BOOL fauxConnectionNo(id self, SEL _cmd) { return NO; }
 static BOOL fauxConnectionYes(id self, SEL _cmd) { return YES; }
+static BOOL fauxConnectionYesArg(id self, SEL _cmd, double arg) { return YES; }
 static id fauxConnectionEmptyArray(id self, SEL _cmd) { return @[]; }
 static id fauxConnectionNilObject(id self, SEL _cmd) { return nil; }
 static double fauxConnectionZeroDouble(id self, SEL _cmd) { return 0; }
+static long fauxConnectionZeroLong(id self, SEL _cmd) { return 0; }
 static NSString *fauxConnectionDescription(id self, SEL _cmd) { return @"<FauxCaptureConnection>"; }
+static void fauxConnectionSetLong(id self, SEL _cmd, long v) { }
+static void fauxConnectionSetDouble(id self, SEL _cmd, double v) { }
+static void fauxConnectionSetBool(id self, SEL _cmd, BOOL v) { }
 
-/// A single shared fake AVCaptureConnection handed to app delegates as the `fromConnection:`
-/// argument. It is a never-freed singleton (like the fake format) so the real superclass dealloc,
-/// which dereferences a zeroed internal ivar, never runs; the commonly-read accessors are answered
-/// safely so a delegate reading connection.videoOrientation / isVideoMirrored / inputPorts cannot
-/// reach the zeroed-internal superclass IMP and crash the host.
-static id fauxMakeConnection(void) {
-    static id connection;
+static const void *kConnPreviewLayerKey = &kConnPreviewLayerKey;
+static id fauxConnectionVideoPreviewLayer(id self, SEL _cmd) { return objc_getAssociatedObject(self, kConnPreviewLayerKey); }
+
+// Safety net: any selector NOT explicitly overridden (and not a real-superclass method) resolves
+// to a benign nil/zero return instead of crashing. (Inherited real methods still dispatch normally;
+// the explicit overrides above cover the ones that touch zeroed internal ivars.)
+static NSMethodSignature *fauxFwdMethodSignature(id self, SEL _cmd, SEL sel) {
+    return [NSMethodSignature signatureWithObjCTypes:"@@:"];
+}
+static void fauxFwdInvocation(id self, SEL _cmd, NSInvocation *invocation) {
+    id nilValue = nil;
+    @try { [invocation setReturnValue:&nilValue]; } @catch (__unused id e) { }
+}
+static void fauxInstallForwardingNet(Class cls) {
+    if (!cls) return;
+    class_addMethod(cls, @selector(methodSignatureForSelector:), (IMP)fauxFwdMethodSignature, "@@::");
+    class_addMethod(cls, @selector(forwardInvocation:), (IMP)fauxFwdInvocation, "v@:@");
+}
+
+static Class fauxConnectionClass(void) {
+    static Class connectionClass;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         Class superClass = objc_getClass("AVCaptureConnection");
         if (!superClass) return;
-        Class connectionClass = objc_getClass("FauxCaptureConnection");
-        if (!connectionClass) {
-            connectionClass = objc_allocateClassPair(superClass, "FauxCaptureConnection", 0);
-            if (!connectionClass) return;
-            class_addMethod(connectionClass, @selector(videoOrientation), (IMP)fauxConnectionVideoOrientation, "q@:");
-            class_addMethod(connectionClass, @selector(isVideoMirrored), (IMP)fauxConnectionNo, "B@:");
-            class_addMethod(connectionClass, @selector(isVideoMirroringSupported), (IMP)fauxConnectionYes, "B@:");
-            class_addMethod(connectionClass, @selector(isEnabled), (IMP)fauxConnectionYes, "B@:");
-            class_addMethod(connectionClass, @selector(isActive), (IMP)fauxConnectionYes, "B@:");
-            class_addMethod(connectionClass, @selector(inputPorts), (IMP)fauxConnectionEmptyArray, "@@:");
-            class_addMethod(connectionClass, @selector(output), (IMP)fauxConnectionNilObject, "@@:");
-            class_addMethod(connectionClass, @selector(videoRotationAngle), (IMP)fauxConnectionZeroDouble, "d@:");
-            class_addMethod(connectionClass, @selector(description), (IMP)fauxConnectionDescription, "@@:");
-            objc_registerClassPair(connectionClass);
-        }
-        connection = class_createInstance(connectionClass, 0);
+        connectionClass = objc_getClass("FauxCaptureConnection");
+        if (connectionClass) return;
+        connectionClass = objc_allocateClassPair(superClass, "FauxCaptureConnection", 0);
+        if (!connectionClass) return;
+        class_addMethod(connectionClass, @selector(videoOrientation), (IMP)fauxConnectionVideoOrientation, "q@:");
+        class_addMethod(connectionClass, @selector(setVideoOrientation:), (IMP)fauxConnectionSetLong, "v@:q");
+        class_addMethod(connectionClass, @selector(isVideoOrientationSupported), (IMP)fauxConnectionYes, "B@:");
+        class_addMethod(connectionClass, @selector(videoRotationAngle), (IMP)fauxConnectionZeroDouble, "d@:");
+        class_addMethod(connectionClass, @selector(setVideoRotationAngle:), (IMP)fauxConnectionSetDouble, "v@:d");
+        class_addMethod(connectionClass, @selector(isVideoRotationAngleSupported:), (IMP)fauxConnectionYesArg, "B@:d");
+        class_addMethod(connectionClass, @selector(isVideoMirrored), (IMP)fauxConnectionNo, "B@:");
+        class_addMethod(connectionClass, @selector(setVideoMirrored:), (IMP)fauxConnectionSetBool, "v@:B");
+        class_addMethod(connectionClass, @selector(isVideoMirroringSupported), (IMP)fauxConnectionYes, "B@:");
+        class_addMethod(connectionClass, @selector(automaticallyAdjustsVideoMirroring), (IMP)fauxConnectionNo, "B@:");
+        class_addMethod(connectionClass, @selector(setAutomaticallyAdjustsVideoMirroring:), (IMP)fauxConnectionSetBool, "v@:B");
+        class_addMethod(connectionClass, @selector(isEnabled), (IMP)fauxConnectionYes, "B@:");
+        class_addMethod(connectionClass, @selector(setEnabled:), (IMP)fauxConnectionSetBool, "v@:B");
+        class_addMethod(connectionClass, @selector(isActive), (IMP)fauxConnectionYes, "B@:");
+        class_addMethod(connectionClass, @selector(preferredVideoStabilizationMode), (IMP)fauxConnectionZeroLong, "q@:");
+        class_addMethod(connectionClass, @selector(setPreferredVideoStabilizationMode:), (IMP)fauxConnectionSetLong, "v@:q");
+        class_addMethod(connectionClass, @selector(activeVideoStabilizationMode), (IMP)fauxConnectionZeroLong, "q@:");
+        class_addMethod(connectionClass, @selector(videoScaleAndCropFactor), (IMP)fauxConnectionZeroDouble, "d@:");
+        class_addMethod(connectionClass, @selector(setVideoScaleAndCropFactor:), (IMP)fauxConnectionSetDouble, "v@:d");
+        class_addMethod(connectionClass, @selector(inputPorts), (IMP)fauxConnectionEmptyArray, "@@:");
+        class_addMethod(connectionClass, @selector(output), (IMP)fauxConnectionNilObject, "@@:");
+        class_addMethod(connectionClass, @selector(videoPreviewLayer), (IMP)fauxConnectionVideoPreviewLayer, "@@:");
+        class_addMethod(connectionClass, @selector(description), (IMP)fauxConnectionDescription, "@@:");
+        objc_registerClassPair(connectionClass);
+        fauxInstallForwardingNet(connectionClass);
     });
+    return connectionClass;
+}
+
+/// A single shared fake AVCaptureConnection handed to app delegates as the `fromConnection:`
+/// argument. Never-freed singleton so the zeroed-ivar real dealloc never runs.
+static id fauxMakeConnection(void) {
+    static id connection;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = fauxConnectionClass();
+        if (cls) connection = class_createInstance(cls, 0);
+    });
+    return connection;
+}
+
+// Per-instance fake connection carrying a preview layer (used by the manual NoConnections preview
+// path: AVCaptureConnection(inputPort:videoPreviewLayer:)).
+static id fauxMakeConnectionWithPreviewLayer(id previewLayer) {
+    Class cls = fauxConnectionClass();
+    if (!cls) return nil;
+    id connection = class_createInstance(cls, 0);
+    if (previewLayer) objc_setAssociatedObject(connection, kConnPreviewLayerKey, previewLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return connection;
 }
 
@@ -682,9 +831,47 @@ static id fauxInputInitWithDevice(id self, SEL _cmd, id device, NSError **error)
     return nil;
 }
 
+static OSType fauxOutputRequestedFormat(id output) {
+    NSNumber *fmt = objc_getAssociatedObject(output, kVideoFormatKey);
+    return fmt ? (OSType)fmt.unsignedIntValue : 0;
+}
+
+static void fauxSetVideoSettings(id self, SEL _cmd, NSDictionary *settings) {
+    // Store the requested pixel format / settings; do NOT call the original (no real graph exists
+    // to validate against). The pump converts BGRA to the requested 420 format.
+    objc_setAssociatedObject(self, kVideoSettingsKey, settings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSNumber *fmt = settings[(NSString *)kCVPixelBufferPixelFormatTypeKey];
+    if (fmt) {
+        objc_setAssociatedObject(self, kVideoFormatKey, fmt, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        FauxFramePump *pump = objc_getAssociatedObject(self, kVideoPumpKey);
+        if (pump) pump.requestedPixelFormat = (OSType)fmt.unsignedIntValue;
+    }
+}
+static NSDictionary *fauxGetVideoSettings(id self, SEL _cmd) {
+    return objc_getAssociatedObject(self, kVideoSettingsKey) ?: @{};
+}
+static NSArray *fauxAvailableVideoCVPixelFormatTypes(id self, SEL _cmd) {
+    return @[ @(kCVPixelFormatType_32BGRA),
+              @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+              @(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) ];
+}
+
 static void fauxSetSampleBufferDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
     objc_setAssociatedObject(self, kOutputDelegateKey, delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, kOutputQueueKey, queue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Ordering-robust: if the output was already added to a session, bind the delegate to the
+    // pump now (apps such as Flutter / vision-camera v3 set the delegate AFTER addOutput:).
+    FauxFramePump *pump = objc_getAssociatedObject(self, kVideoPumpKey);
+    if (pump && delegate && queue) {
+        @synchronized(pump) {
+            pump.captureOutput = self;
+            pump.sampleBufferDelegate = delegate;
+            pump.deliveryQueue = queue;
+        }
+        OSType fmt = fauxOutputRequestedFormat(self);
+        if (fmt) pump.requestedPixelFormat = fmt;
+        [pump startIfReady];
+    }
 }
 
 static void fauxSetMetadataDelegate(id self, SEL _cmd, id delegate, dispatch_queue_t queue) {
@@ -697,7 +884,25 @@ static void fauxSetMetadataDelegate(id self, SEL _cmd, id delegate, dispatch_que
 }
 
 static NSArray *fauxMetadataAvailableTypes(id self, SEL _cmd) {
-    return @[ AVMetadataObjectTypeQRCode ];
+    // Advertise every machine-readable code type so apps can freely set metadataObjectTypes
+    // without the real setter throwing "unsupported type" (which it validates against this list).
+    static NSArray *types;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray *candidates = @[
+            AVMetadataObjectTypeQRCode, AVMetadataObjectTypeEAN8Code, AVMetadataObjectTypeEAN13Code,
+            AVMetadataObjectTypePDF417Code, AVMetadataObjectTypeUPCECode, AVMetadataObjectTypeCode39Code,
+            AVMetadataObjectTypeCode93Code, AVMetadataObjectTypeCode128Code, AVMetadataObjectTypeCode39Mod43Code,
+            AVMetadataObjectTypeAztecCode, AVMetadataObjectTypeITF14Code, AVMetadataObjectTypeDataMatrixCode,
+            AVMetadataObjectTypeInterleaved2of5Code
+        ];
+        NSMutableArray *valid = [NSMutableArray array];
+        for (AVMetadataObjectType type in candidates) {
+            if (type) [valid addObject:type];
+        }
+        types = [valid copy];
+    });
+    return types;
 }
 
 static void fauxInvokePhotoDelegate(id delegate, SEL selector, id output, id argument) {
@@ -749,29 +954,81 @@ static BOOL fauxInputIsFake(id input) {
     return objc_getAssociatedObject(input, kFakeInputDeviceKey) != nil;
 }
 
-static void fauxSessionAddInput(id self, SEL _cmd, id input) {
+/// A fake AVCaptureDeviceInput has zeroed internals, so the real `-ports` (and the connection-building
+/// that calls it — e.g. AVCaptureVideoPreviewLayer.setSession: → _connectionsForNewVideoPreviewLayer:)
+/// dereferences garbage and crashes. Return no ports for fakes so no real connection graph is built.
+static id fauxInputPorts(id self, SEL _cmd) {
+    if (fauxInputIsFake(self)) return @[];
+    if (fauxOriginalInputPorts) return ((id (*)(id, SEL))fauxOriginalInputPorts)(self, _cmd);
+    return @[];
+}
+
+// Synthetic session graph bookkeeping so apps that read session.inputs/.outputs (a common
+// "already added?" guard) get sane answers even though we never build the real graph.
+static NSMutableArray *fauxSessionList(id session, const void *key) {
+    NSMutableArray *list = objc_getAssociatedObject(session, key);
+    if (!list) { list = [NSMutableArray array]; objc_setAssociatedObject(session, key, list, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    return list;
+}
+static void fauxSessionListAdd(id session, const void *key, id obj) {
+    if (!obj) return;
+    NSMutableArray *list = fauxSessionList(session, key);
+    @synchronized(list) { if (![list containsObject:obj]) [list addObject:obj]; }
+}
+static void fauxSessionListRemove(id session, const void *key, id obj) {
+    NSMutableArray *list = objc_getAssociatedObject(session, key);
+    if (list && obj) { @synchronized(list) { [list removeObject:obj]; } }
+}
+
+static void fauxSessionRegisterInput(id self, id input) {
+    fauxSessionListAdd(self, kSessionInputsKey, input);
     if (fauxInputIsFake(input)) {
         FauxFramePump *pump = fauxPumpForSession(self);
         id device = objc_getAssociatedObject(input, kFakeInputDeviceKey);
-        pump.frontCamera = (FauxFakeDevicePosition(device) == 2);
-        return;
+        pump.frontCamera = (FauxFakeDevicePosition(device) == AVCaptureDevicePositionFront);
     }
-    if (fauxOriginalAddInput) {
-        ((void (*)(id, SEL, id))fauxOriginalAddInput)(self, _cmd, input);
-    }
+    // Non-fake inputs are accepted and ignored: the simulator has no real device, and the real
+    // addInput: would build a connection graph that does not exist (crash risk). The faux pump
+    // is the source regardless.
 }
 
-static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
-    if ([output isKindOfClass:objc_getClass("AVCaptureVideoDataOutput")]) {
+static void fauxSessionAddInput(id self, SEL _cmd, id input) {
+    os_log(fauxSessionLog(), "addInput class=%{public}s fake=%d", object_getClassName(input), fauxInputIsFake(input) ? 1 : 0);
+    fauxSessionRegisterInput(self, input);
+}
+
+static void fauxSessionAddInputWithNoConnections(id self, SEL _cmd, id input) {
+    os_log(fauxSessionLog(), "addInputWithNoConnections fake=%d", fauxInputIsFake(input) ? 1 : 0);
+    fauxSessionRegisterInput(self, input);
+}
+
+static BOOL fauxIsKnownOutputClass(id output, const char *className) {
+    Class cls = objc_getClass(className);
+    return cls && [output isKindOfClass:cls];
+}
+
+static void fauxSessionRegisterOutput(id self, id output) {
+    fauxSessionListAdd(self, kSessionOutputsKey, output);
+    if (fauxIsKnownOutputClass(output, "AVCaptureVideoDataOutput")) {
         FauxFramePump *pump = fauxPumpForSession(self);
-        pump.captureOutput = output;
-        pump.sampleBufferDelegate = objc_getAssociatedObject(output, kOutputDelegateKey);
-        pump.deliveryQueue = objc_getAssociatedObject(output, kOutputQueueKey);
-        objc_setAssociatedObject(output, kOutputDelegateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Store the pump on the output so a later setSampleBufferDelegate:queue: can bind it
+        // (delegate may be set before OR after addOutput:).
+        objc_setAssociatedObject(output, kVideoPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        OSType fmt = fauxOutputRequestedFormat(output);
+        if (fmt) pump.requestedPixelFormat = fmt;
+        id delegate = objc_getAssociatedObject(output, kOutputDelegateKey);
+        dispatch_queue_t queue = objc_getAssociatedObject(output, kOutputQueueKey);
+        if (delegate && queue) {
+            @synchronized(pump) {
+                pump.captureOutput = output;
+                pump.sampleBufferDelegate = delegate;
+                pump.deliveryQueue = queue;
+            }
+        }
         [pump startIfReady];
         return;
     }
-    if ([output isKindOfClass:objc_getClass("AVCaptureMetadataOutput")]) {
+    if (fauxIsKnownOutputClass(output, "AVCaptureMetadataOutput")) {
         FauxFramePump *pump = fauxPumpForSession(self);
         objc_setAssociatedObject(output, kMetadataPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         id delegate = objc_getAssociatedObject(output, kMetadataDelegateKey);
@@ -781,50 +1038,164 @@ static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
         }
         return;
     }
-    if ([output isKindOfClass:objc_getClass("AVCapturePhotoOutput")]) {
+    if (fauxIsKnownOutputClass(output, "AVCapturePhotoOutput")) {
         FauxFramePump *pump = fauxPumpForSession(self);
         objc_setAssociatedObject(output, kPhotoPumpKey, pump, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [pump markPhotoConsumer];
         return;
     }
-    if (fauxOriginalAddOutput) {
-        ((void (*)(id, SEL, id))fauxOriginalAddOutput)(self, _cmd, output);
-    }
+    // AVCaptureMovieFileOutput / AudioDataOutput / DepthDataOutput and any other output: accept and
+    // ignore. The real addOutput: over a faux (connectionless) input graph would crash, so we must
+    // NOT fall through to the original. These simply produce no frames (safe no-op).
+}
+
+static void fauxSessionAddOutput(id self, SEL _cmd, id output) {
+    os_log(fauxSessionLog(), "addOutput class=%{public}s", object_getClassName(output));
+    fauxSessionRegisterOutput(self, output);
+}
+
+static void fauxSessionAddOutputWithNoConnections(id self, SEL _cmd, id output) {
+    os_log(fauxSessionLog(), "addOutputWithNoConnections class=%{public}s", object_getClassName(output));
+    fauxSessionRegisterOutput(self, output);
+}
+
+// isRunning is modeled via an associated flag + manual KVO on "running" so apps that observe
+// session.isRunning (SwiftUI/Combine/RN readiness gating) advance their state machine.
+static void fauxSessionSetRunning(id self, BOOL running) {
+    NSNumber *current = objc_getAssociatedObject(self, kSessionRunningKey);
+    if (current.boolValue == running) return;
+    ((void (*)(id, SEL, NSString *))objc_msgSend)(self, @selector(willChangeValueForKey:), @"running");
+    objc_setAssociatedObject(self, kSessionRunningKey, @(running), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ((void (*)(id, SEL, NSString *))objc_msgSend)(self, @selector(didChangeValueForKey:), @"running");
+}
+static BOOL fauxSessionIsRunning(id self, SEL _cmd) {
+    return [(NSNumber *)objc_getAssociatedObject(self, kSessionRunningKey) boolValue];
 }
 
 static void fauxSessionStartRunning(id self, SEL _cmd) {
-    os_log(fauxSessionLog(), "startRunning intercepted (faux graph)");
-    FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
-    if (!pump) return;
+    FauxFramePump *pump = fauxPumpForSession(self);
     NSHashTable *previewLayers = objc_getAssociatedObject(self, kSessionPreviewLayersKey);
+    os_log(fauxSessionLog(), "startRunning intercepted pumpExists=%d previewLayers=%lu", pump != nil, (unsigned long)previewLayers.count);
     for (CALayer *previewLayer in previewLayers) {
         [pump registerPreviewLayer:previewLayer];
     }
     [pump start];
+    fauxSessionSetRunning(self, YES);
 }
 
-static void fauxPreviewSetSession(id self, SEL _cmd, id session) {
-    if (fauxOriginalPreviewSetSession) {
-        ((void (*)(id, SEL, id))fauxOriginalPreviewSetSession)(self, _cmd, session);
-    }
-    if (!session) return;
+// Registers an app-owned preview layer with its session's pump so it receives faux frames.
+// Shared by every way an app can attach a session to a preview layer.
+static void fauxPreviewRegister(id layer, id session) {
+    if (!layer || !session) return;
     NSHashTable *previewLayers = objc_getAssociatedObject(session, kSessionPreviewLayersKey);
     if (!previewLayers) {
         previewLayers = [NSHashTable weakObjectsHashTable];
         objc_setAssociatedObject(session, kSessionPreviewLayersKey, previewLayers, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    [previewLayers addObject:self];
-    FauxFramePump *pump = objc_getAssociatedObject(session, kSessionPumpKey);
-    if (pump) [pump registerPreviewLayer:self];
+    [previewLayers addObject:layer];
+    FauxFramePump *pump = fauxPumpForSession(session);
+    os_log(fauxSessionLog(), "preview registered pumpExists=%d", pump != nil);
+    [pump registerPreviewLayer:layer];
+}
+
+// We do NOT forward setSession: to the real implementation. On the simulator the session has no real
+// capture graph, so AVFoundation's -[AVCaptureSession _connectionsForNewVideoPreviewLayer:] walks the
+// fake input/connection objects (zeroed internals) and crashes (EXC_BAD_ACCESS). We don't need it: the
+// pump overlays its own AVSampleBufferDisplayLayer on the preview layer to show frames. The layer
+// stays a valid object; only the (unused, crash-prone) real wiring is skipped.
+static void fauxPreviewSetSession(id self, SEL _cmd, id session) {
+    fauxPreviewRegister(self, session);
+}
+
+static void fauxPreviewSetSessionWithNoConnection(id self, SEL _cmd, id session) {
+    fauxPreviewRegister(self, session);
+}
+
+static id fauxPreviewInitWithSession(id self, SEL _cmd, id session) {
+    // Initialize the layer WITHOUT a session (nil → no graph wiring, no crash), then register it for
+    // faux frames. Returns a valid AVCaptureVideoPreviewLayer.
+    id result = self;
+    if (fauxOriginalPreviewInitWithSession) {
+        result = ((id (*)(id, SEL, id))fauxOriginalPreviewInitWithSession)(self, _cmd, nil);
+    }
+    fauxPreviewRegister(result ?: self, session);
+    return result;
 }
 
 static void fauxSessionStopRunning(id self, SEL _cmd) {
     FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
     if (pump) [pump stop];
+    fauxSessionSetRunning(self, NO);
+}
+
+static void fauxSessionRemoveInput(id self, SEL _cmd, id input) {
+    fauxSessionListRemove(self, kSessionInputsKey, input);
+    // front/back is re-derived on the next addInput:.
+}
+
+static void fauxSessionRemoveOutput(id self, SEL _cmd, id output) {
+    fauxSessionListRemove(self, kSessionOutputsKey, output);
+    FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
+    if (pump) [pump detachOutput:output];
+}
+
+static id fauxSessionInputs(id self, SEL _cmd) {
+    NSMutableArray *list = objc_getAssociatedObject(self, kSessionInputsKey);
+    if (!list) return @[];
+    @synchronized(list) { return [list copy]; }
+}
+static id fauxSessionOutputs(id self, SEL _cmd) {
+    NSMutableArray *list = objc_getAssociatedObject(self, kSessionOutputsKey);
+    if (!list) return @[];
+    @synchronized(list) { return [list copy]; }
+}
+static id fauxSessionConnections(id self, SEL _cmd) {
+    FauxFramePump *pump = objc_getAssociatedObject(self, kSessionPumpKey);
+    id conn = pump ? pump.captureConnection : nil;
+    return conn ? @[conn] : @[];
+}
+
+// AVCaptureConnection manual construction (vision-camera v4 / NoConnections preview wiring): return a
+// faux connection instead of letting the real init run over a faux/zeroed input port.
+static id fauxConnInitWithInputPortVideoPreviewLayer(id self, SEL _cmd, id port, id previewLayer) {
+    return fauxMakeConnectionWithPreviewLayer(previewLayer);
+}
+static id fauxConnInitWithInputPortsOutput(id self, SEL _cmd, NSArray *ports, id output) {
+    return fauxMakeConnection();
 }
 
 static BOOL fauxSessionCanAddInput(id self, SEL _cmd, id input) { return YES; }
 static BOOL fauxSessionCanAddOutput(id self, SEL _cmd, id output) { return YES; }
+static BOOL fauxSessionCanAddConnection(id self, SEL _cmd, id connection) { return YES; }
+static void fauxSessionVoidNoArg(id self, SEL _cmd) { }
+
+static void fauxSessionAddConnection(id self, SEL _cmd, id connection) {
+    // Real connections don't exist on the simulator; the faux pump already fans out. If the
+    // connection carries a preview layer (NoConnections preview path), register it.
+    if (connection && [connection respondsToSelector:@selector(videoPreviewLayer)]) {
+        id layer = ((id (*)(id, SEL))objc_msgSend)(connection, @selector(videoPreviewLayer));
+        if (layer) fauxPreviewRegister(layer, self);
+    }
+}
+
+static void fauxSessionSetPreset(id self, SEL _cmd, NSString *preset) {
+    if (preset) objc_setAssociatedObject(self, kSessionPresetKey, preset, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static NSString *fauxSessionGetPreset(id self, SEL _cmd) {
+    NSString *preset = objc_getAssociatedObject(self, kSessionPresetKey);
+    return preset ?: AVCaptureSessionPresetHigh;
+}
+static BOOL fauxSessionCanSetPreset(id self, SEL _cmd, NSString *preset) { return YES; }
+
+static void fauxMetadataSetObjectTypes(id self, SEL _cmd, NSArray *types) {
+    // Store only; the real setter validates against connection-derived available types and throws
+    // (NSInvalidArgumentException) for any unsupported type when the graph is faux/empty.
+    objc_setAssociatedObject(self, kMetadataTypesKey, types, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static NSArray *fauxMetadataGetObjectTypes(id self, SEL _cmd) {
+    NSArray *types = objc_getAssociatedObject(self, kMetadataTypesKey);
+    return types ?: @[];
+}
 
 // MARK: - Installation
 
@@ -838,42 +1209,97 @@ static IMP fauxReplaceInstanceMethod(Class targetClass, SEL selector, IMP implem
     return original;
 }
 
+static void fauxVoidTwoArg(id self, SEL _cmd, id a, id b) { }
+
+// Installs every session-level swizzle on a given session class. Called for both AVCaptureSession
+// and AVCaptureMultiCamSession (a subclass that overrides these selectors, so it does NOT inherit
+// the swizzle and must be installed directly).
+static void fauxInstallSessionClass(Class sessionClass) {
+    if (!sessionClass) return;
+    fauxReplaceInstanceMethod(sessionClass, @selector(addInput:), (IMP)fauxSessionAddInput, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(addOutput:), (IMP)fauxSessionAddOutput, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(addInputWithNoConnections:), (IMP)fauxSessionAddInputWithNoConnections, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(addOutputWithNoConnections:), (IMP)fauxSessionAddOutputWithNoConnections, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(addConnection:), (IMP)fauxSessionAddConnection, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(canAddConnection:), (IMP)fauxSessionCanAddConnection, "B@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(startRunning), (IMP)fauxSessionStartRunning, "v@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(stopRunning), (IMP)fauxSessionStopRunning, "v@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(canAddInput:), (IMP)fauxSessionCanAddInput, "B@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(canAddOutput:), (IMP)fauxSessionCanAddOutput, "B@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(beginConfiguration), (IMP)fauxSessionVoidNoArg, "v@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(commitConfiguration), (IMP)fauxSessionVoidNoArg, "v@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(setSessionPreset:), (IMP)fauxSessionSetPreset, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(sessionPreset), (IMP)fauxSessionGetPreset, "@@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(canSetSessionPreset:), (IMP)fauxSessionCanSetPreset, "B@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(removeInput:), (IMP)fauxSessionRemoveInput, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(removeOutput:), (IMP)fauxSessionRemoveOutput, "v@:@");
+    fauxReplaceInstanceMethod(sessionClass, @selector(inputs), (IMP)fauxSessionInputs, "@@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(outputs), (IMP)fauxSessionOutputs, "@@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(connections), (IMP)fauxSessionConnections, "@@:");
+    fauxReplaceInstanceMethod(sessionClass, @selector(isRunning), (IMP)fauxSessionIsRunning, "B@:");
+}
+
+// Success-gated (not dispatch_once): if AVFoundation isn't loaded yet at __attribute__((constructor))
+// time (Flutter/Unity dlopen it lazily), this returns without marking done so the dyld add-image
+// retry can install once the framework appears. dyld serializes image-load callbacks, so no lock.
 void FauxInstallCaptureSession(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
+    static BOOL sInstalled = NO;
+    if (sInstalled) return;
+    Class sessionClass = objc_getClass("AVCaptureSession");
+    if (!sessionClass) return;
+    {
         Method nsObjectInit = class_getInstanceMethod([NSObject class], @selector(init));
         fauxNSObjectInit = method_getImplementation(nsObjectInit);
 
         Class inputClass = objc_getClass("AVCaptureDeviceInput");
         if (inputClass) {
             fauxOriginalInputInit = fauxReplaceInstanceMethod(inputClass, @selector(initWithDevice:error:), (IMP)fauxInputInitWithDevice, "@@:@^@");
+            fauxOriginalInputPorts = fauxReplaceInstanceMethod(inputClass, @selector(ports), (IMP)fauxInputPorts, "@@:");
         }
         Class outputClass = objc_getClass("AVCaptureVideoDataOutput");
         if (outputClass) {
             fauxReplaceInstanceMethod(outputClass, @selector(setSampleBufferDelegate:queue:), (IMP)fauxSetSampleBufferDelegate, "v@:@@");
+            fauxReplaceInstanceMethod(outputClass, @selector(setVideoSettings:), (IMP)fauxSetVideoSettings, "v@:@");
+            fauxReplaceInstanceMethod(outputClass, @selector(videoSettings), (IMP)fauxGetVideoSettings, "@@:");
+            fauxReplaceInstanceMethod(outputClass, @selector(availableVideoCVPixelFormatTypes), (IMP)fauxAvailableVideoCVPixelFormatTypes, "@@:");
         }
-        Class sessionClass = objc_getClass("AVCaptureSession");
-        if (sessionClass) {
-            fauxOriginalAddInput = fauxReplaceInstanceMethod(sessionClass, @selector(addInput:), (IMP)fauxSessionAddInput, "v@:@");
-            fauxOriginalAddOutput = fauxReplaceInstanceMethod(sessionClass, @selector(addOutput:), (IMP)fauxSessionAddOutput, "v@:@");
-            fauxReplaceInstanceMethod(sessionClass, @selector(startRunning), (IMP)fauxSessionStartRunning, "v@:");
-            fauxReplaceInstanceMethod(sessionClass, @selector(stopRunning), (IMP)fauxSessionStopRunning, "v@:");
-            fauxReplaceInstanceMethod(sessionClass, @selector(canAddInput:), (IMP)fauxSessionCanAddInput, "B@:@");
-            fauxReplaceInstanceMethod(sessionClass, @selector(canAddOutput:), (IMP)fauxSessionCanAddOutput, "B@:@");
-        }
+
+        fauxInstallSessionClass(objc_getClass("AVCaptureSession"));
+        fauxInstallSessionClass(objc_getClass("AVCaptureMultiCamSession"));
+
         Class previewClass = objc_getClass("AVCaptureVideoPreviewLayer");
         if (previewClass) {
             fauxOriginalPreviewSetSession = fauxReplaceInstanceMethod(previewClass, @selector(setSession:), (IMP)fauxPreviewSetSession, "v@:@");
+            fauxOriginalPreviewSetSessionNoConn = fauxReplaceInstanceMethod(previewClass, @selector(setSessionWithNoConnection:), (IMP)fauxPreviewSetSessionWithNoConnection, "v@:@");
+            fauxOriginalPreviewInitWithSession = fauxReplaceInstanceMethod(previewClass, @selector(initWithSession:), (IMP)fauxPreviewInitWithSession, "@@:@");
         }
         Class metadataClass = objc_getClass("AVCaptureMetadataOutput");
         if (metadataClass) {
             fauxReplaceInstanceMethod(metadataClass, @selector(setMetadataObjectsDelegate:queue:), (IMP)fauxSetMetadataDelegate, "v@:@@");
             fauxReplaceInstanceMethod(metadataClass, @selector(availableMetadataObjectTypes), (IMP)fauxMetadataAvailableTypes, "@@:");
+            fauxReplaceInstanceMethod(metadataClass, @selector(setMetadataObjectTypes:), (IMP)fauxMetadataSetObjectTypes, "v@:@");
+            fauxReplaceInstanceMethod(metadataClass, @selector(metadataObjectTypes), (IMP)fauxMetadataGetObjectTypes, "@@:");
         }
         Class photoClass = objc_getClass("AVCapturePhotoOutput");
         if (photoClass) {
             fauxReplaceInstanceMethod(photoClass, @selector(capturePhotoWithSettings:delegate:), (IMP)fauxCapturePhotoWithSettings, "v@:@@");
         }
+        Class movieClass = objc_getClass("AVCaptureMovieFileOutput");
+        if (movieClass) {
+            // No-op recording so apps that add a movie output don't drive the (absent) real graph.
+            fauxReplaceInstanceMethod(movieClass, @selector(startRecordingToOutputFileURL:recordingDelegate:), (IMP)fauxVoidTwoArg, "v@:@@");
+            fauxReplaceInstanceMethod(movieClass, @selector(stopRecording), (IMP)fauxSessionVoidNoArg, "v@:");
+        }
+        // Ensure the fake connection class exists, then intercept manual AVCaptureConnection
+        // construction so apps wiring connections by hand (vision-camera v4 / NoConnections) get a
+        // safe faux connection instead of a real one over a faux input port.
+        fauxConnectionClass();
+        Class connClass = objc_getClass("AVCaptureConnection");
+        if (connClass) {
+            fauxReplaceInstanceMethod(connClass, @selector(initWithInputPort:videoPreviewLayer:), (IMP)fauxConnInitWithInputPortVideoPreviewLayer, "@@:@@");
+            fauxReplaceInstanceMethod(connClass, @selector(initWithInputPorts:output:), (IMP)fauxConnInitWithInputPortsOutput, "@@:@@");
+        }
         os_log(fauxSessionLog(), "capture session interception installed");
-    });
+        sInstalled = YES;
+    }
 }

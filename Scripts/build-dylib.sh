@@ -29,6 +29,8 @@ for ARCH in "${ARCHITECTURES[@]}"; do
         -framework CoreMedia \
         -framework CoreVideo \
         -framework AVFoundation \
+        -framework UIKit \
+        -framework CoreGraphics \
         -o "$SLICE" \
         "${SOURCES[@]}"
     SLICES+=("$SLICE")

@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import ServiceManagement
+import TipKit
 import FauxDomain
 import FauxAdapters
 
@@ -20,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Injection is an app-level job, not a popover one: as long as FauxCam runs it polls for booted
     /// simulators and keeps every one injected — whether or not the menu is open.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        FauxCamTour.configure()
         controller.$devices
             .receive(on: RunLoop.main)
             .sink { [weak self] devices in self?.devicesChanged(devices) }
@@ -119,7 +121,7 @@ struct FauxCamApp: App {
            let icon = NSImage(contentsOf: iconURL), icon.size.height > 0 {
             let aspectRatio = icon.size.width / icon.size.height
             icon.size = NSSize(width: menuBarIconHeight * aspectRatio, height: menuBarIconHeight)
-            icon.isTemplate = false
+            icon.isTemplate = true
             icon.accessibilityDescription = "FauxCam"
             return icon
         }
@@ -150,16 +152,28 @@ struct RootView: View {
             }
         }
         .onAppear { camera.refresh() }
+        .task(id: settings.hasOnboarded) {
+            guard settings.hasOnboarded else { return }
+            await FauxCamTour.run()
+        }
+    }
+
+    /// The viewfinder framing controls (gesture surface, rotate, zoom badge) only exist for a framing
+    /// source with camera access — the tour skips their steps otherwise instead of stalling.
+    private var framingControlsVisible: Bool {
+        controller.sourceKind.supportsFraming &&
+        !(controller.sourceKind == .webcam && camera.status != .authorized)
     }
 
     private var mainContent: some View {
         VStack(spacing: 12) {
-            ViewfinderCard(controller: controller, camera: camera, preview: preview)
+            ViewfinderCard(controller: controller, camera: camera, preview: preview, autoMode: autoMode)
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
             sourcePicker
                 .padding(.horizontal, 16)
+                .popoverTip(SourceTip(), arrowEdge: .top)
 
             statusPill
             footer
@@ -168,23 +182,27 @@ struct RootView: View {
         .onAppear {
             reconfigurePreview()
             preview.start()
+            FauxCamTour.updateFramingControlsVisible(framingControlsVisible)
         }
         .onDisappear { preview.stop() }
-        .onChange(of: controller.sourceKind) { _, _ in sourceChanged() }
+        .onChange(of: controller.sourceKind) { _, _ in sourceChanged(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
         .onChange(of: controller.imagePath) { _, _ in sourceChanged() }
         .onChange(of: controller.videoPath) { _, _ in sourceChanged() }
         .onChange(of: controller.qrText) { _, _ in sourceChanged() }
         .onChange(of: controller.deviceAspect) { _, _ in deviceChanged() }
+        .onChange(of: controller.deviceLandscape) { _, _ in deviceChanged() }
         .onChange(of: controller.region) { _, _ in preview.setCrop(controller.region); autoMode.setCrop(controller.region) }
-        .onChange(of: camera.status) { _, _ in preview.rebuild() }
+        .onChange(of: camera.status) { _, _ in preview.rebuild(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }
     }
 
     private func deviceChanged() {
+        // Selected device or its orientation changed → re-render the preview at the new screen aspect
+        // and re-advertise that device's injected frame size so the app fills the same as the preview.
         reconfigurePreview()
-        autoMode.applyFrameSize(forDevice: controller.selectedUDID, aspect: controller.deviceAspect)
+        autoMode.applyFrameSize(forDevice: controller.selectedUDID, aspect: controller.previewAspect)
     }
 
     private func sourceChanged() {
@@ -194,8 +212,9 @@ struct RootView: View {
 
     private func reconfigurePreview() {
         preview.setCrop(controller.region)
-        preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.outputAspect)
+        preview.configure(descriptor: controller.sourceDescriptor, deviceAspect: controller.previewAspect)
     }
+
 
     // MARK: Bottom (running status pill + footer)
 
@@ -213,6 +232,7 @@ struct RootView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .popoverTip(InjectionTip(), arrowEdge: .top)
         .padding(.horizontal, 16)
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: autoMode.isActive)
     }
@@ -397,10 +417,57 @@ struct ViewfinderCard: View {
     @ObservedObject var controller: SessionController
     @ObservedObject var camera: CameraAuthorization
     @ObservedObject var preview: PreviewStreamer
+    let autoMode: AutoModeController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dragStart: (x: Double, y: Double)?
+    /// Live zoom during a scroll/pinch interaction. Held in @State (re-renders only this card, not the
+    /// whole glassy RootView) and pushed straight to the preview; the observed controller.region is
+    /// committed once, debounced, when the gesture settles.
+    @State private var liveZoom: Double?
+    @State private var zoomCommit: DispatchWorkItem?
+    @State private var zoomBase: Double = 1
+    /// Continuous image-rotation gesture state. Frames bake the COMMITTED angle; during a gesture the
+    /// view rotates by the live-minus-committed DELTA so it tracks the twist, then commits once on end.
+    @State private var rotationCommit: DispatchWorkItem?
+    @State private var rotationBaseRadians: Double = 0
+    @State private var liveRotationRadians: Double?
+
+    private static let cardHeight: CGFloat = 188
+    private static let cardInnerWidth: CGFloat = 328
 
     private var needsCameraPermission: Bool {
         controller.sourceKind == .webcam && camera.status != .authorized
+    }
+
+    private var currentZoom: Double { liveZoom ?? controller.region.zoom }
+    private var currentRotation: Double { liveRotationRadians ?? controller.region.rotationRadians }
+
+    private var rotationAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78)
+    }
+
+    /// The bezel shape follows the DEVICE ORIENTATION (portrait/landscape), independent of image rotation.
+    private var bezelAspect: CGFloat { CGFloat(controller.previewAspect) }
+
+    /// Builds a region that keeps the CURRENT rotation (and any pending live zoom) — every gesture
+    /// derives from this so zoom/drag never silently reset the rotation.
+    private func region(centerX: Double, centerY: Double, zoom: Double) -> CropRegion {
+        CropRegion(centerX: centerX, centerY: centerY, zoom: zoom, rotationRadians: currentRotation)
+    }
+
+    /// Pushes the live crop to BOTH the in-app preview and the injection server (cheap value writes,
+    /// no controller.region mutation → no glassy-RootView re-render). So the main viewfinder, the
+    /// bezel PiP, AND every simulator all show the SAME rotation/zoom/pan live during a gesture.
+    private func pushLiveCrop(_ region: CropRegion) {
+        preview.setCrop(region)
+        autoMode.setCrop(region)
+    }
+
+    /// Magnetic snap to the nearest right angle when within ~7°, so free rotation still lands cleanly.
+    private func snapToRightAngle(_ radians: Double) -> Double {
+        let quarter = Double.pi / 2
+        let nearest = (radians / quarter).rounded() * quarter
+        return abs(radians - nearest) < (7 * .pi / 180) ? nearest : radians
     }
 
     var body: some View {
@@ -409,27 +476,51 @@ struct ViewfinderCard: View {
             if needsCameraPermission {
                 permissionContent
             } else if let image = preview.sourceImage {
-                Image(nsImage: image).resizable().scaledToFill()
+                // The frame IS the camera-aspect feed every simulator receives. Show the WHOLE frame
+                // (scaledToFit, letterboxed in the card) so what the user frames here is exactly what
+                // the app gets — rotation/zoom/pan are already baked in by the pixel pipeline.
+                Image(nsImage: image).resizable().scaledToFit()
             } else {
                 ProgressView()
             }
         }
-        .frame(height: 188)
+        .frame(height: Self.cardHeight)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator, lineWidth: 1))
         .overlay {
             if controller.sourceKind.supportsFraming && !needsCameraPermission {
+                // NSView handles mouse-wheel zoom; SwiftUI handles the trackpad gestures natively
+                // (pinch-zoom + two-finger rotate + pan), composed simultaneously like Apple's apps.
                 ZoomScrollCatcher(onZoom: applyZoom)
                     .gesture(panGesture)
+                    .simultaneousGesture(rotateGesture)
+                    .simultaneousGesture(magnifyGesture)
             }
         }
         .overlay(alignment: .topTrailing) {
             if controller.sourceKind.supportsFraming && !needsCameraPermission {
-                zoomBadge.padding(10)
+                HStack(spacing: 8) {
+                    rotateButton
+                        .popoverTip(RotateTip(), arrowEdge: .bottom)
+                    zoomBadge
+                        .popoverTip(GesturesTip(), arrowEdge: .bottom)
+                }
+                .padding(10)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if preview.sourceImage != nil && !needsCameraPermission {
+                fpsBadge.padding(10)
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            DeviceFramePiP(aspect: controller.deviceAspect) {
+            DeviceFramePiP(aspect: bezelAspect,
+                           animation: rotationAnimation,
+                           isLandscape: controller.deviceLandscape,
+                           onToggleOrientation: { withAnimation(rotationAnimation) { controller.toggleDeviceOrientation() } },
+                           devices: controller.devices,
+                           selectedUDID: controller.selectedUDID,
+                           onSelectDevice: { controller.selectDevice($0) }) {
                 if let image = preview.deviceImage {
                     Image(nsImage: image).resizable().scaledToFill()
                 } else {
@@ -457,14 +548,106 @@ struct ViewfinderCard: View {
         }
     }
 
+    private var fpsBadge: some View {
+        HStack(spacing: 4) {
+            Circle().fill(preview.fps >= 20 ? .green : (preview.fps >= 12 ? .yellow : .orange))
+                .frame(width: 5, height: 5)
+            Text("\(preview.fps, format: .number.precision(.fractionLength(0))) fps")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .glassEffect(.regular, in: .capsule)
+        .help("Live preview frame rate")
+    }
+
+    /// Apple-native trackpad two-finger rotate. `value.rotation` is the ABSOLUTE angle since the gesture
+    /// began; add it to the committed base captured at start. The live angle is pushed through the
+    /// pixel pipeline to the preview AND the injection, so the main viewfinder, the bezel, and the
+    /// simulator all show the SAME rotation live (no view-only transform → no preview/simulator drift).
+    private var rotateGesture: some Gesture {
+        RotateGesture(minimumAngleDelta: .degrees(1))
+            .onChanged { value in
+                if liveRotationRadians == nil { rotationBaseRadians = controller.region.rotationRadians }
+                liveRotationRadians = rotationBaseRadians + value.rotation.radians
+                pushLiveCrop(region(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: currentZoom))
+            }
+            .onEnded { _ in scheduleRotationCommit() }
+    }
+
+    /// Apple-native trackpad pinch zoom. `value.magnification` is the cumulative scale (1.0 at start).
+    private var magnifyGesture: some Gesture {
+        MagnifyGesture(minimumScaleDelta: 0.01)
+            .onChanged { value in
+                if liveZoom == nil { zoomBase = controller.region.zoom }
+                liveZoom = max(0.1, min(10, zoomBase * value.magnification))
+                pushLiveCrop(region(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: currentZoom))
+            }
+            .onEnded { _ in scheduleZoomCommit() }
+    }
+
+    private func scheduleZoomCommit() {
+        zoomCommit?.cancel()
+        let zoom = currentZoom
+        let work = DispatchWorkItem {
+            controller.region = region(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: zoom)
+            liveZoom = nil
+        }
+        zoomCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    /// Debounced single commit (magnetic-snapped to the nearest right angle). Works for inputs with no
+    /// clean end (mouse wheel) and for gestures alike — commits ~0.18s after the last rotation input.
+    private func scheduleRotationCommit() {
+        rotationCommit?.cancel()
+        let work = DispatchWorkItem {
+            guard let live = liveRotationRadians else { return }
+            controller.region = CropRegion(centerX: controller.region.centerX,
+                                           centerY: controller.region.centerY,
+                                           zoom: currentZoom,
+                                           rotationRadians: snapToRightAngle(live))
+            liveRotationRadians = nil
+            liveZoom = nil
+            if !reduceMotion { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+        }
+        rotationCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    private var rotateButton: some View {
+        Button {
+            // Instant 90° clockwise step (snapped), folding in any live zoom.
+            rotationCommit?.cancel(); zoomCommit?.cancel()
+            let snapped = snapToRightAngle(controller.region.rotationRadians + .pi / 2)
+            controller.region = CropRegion(centerX: controller.region.centerX,
+                                           centerY: controller.region.centerY,
+                                           zoom: currentZoom,
+                                           rotationRadians: snapped)
+            liveZoom = nil
+            if !reduceMotion { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+        } label: {
+            Image(systemName: "rotate.right").font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .padding(7)
+        .glassEffect(.regular, in: .circle)
+        .help("Rotate the image 90° — applies to the preview and every injected simulator")
+    }
+
     private var zoomBadge: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass").font(.caption2.weight(.semibold))
-            Text(String(format: "%.1f×", controller.region.zoom))
+            Text(String(format: "%.1f×", currentZoom))
                 .font(.caption.monospacedDigit().weight(.semibold))
-            if controller.region.zoom != 1 || !controller.region.isCentered {
+            if currentZoom != 1 || !controller.region.isCentered || controller.region.isRotated {
                 Divider().frame(height: 11)
-                Button { controller.region = CropRegion() } label: {
+                Button {
+                    zoomCommit?.cancel(); liveZoom = nil
+                    rotationCommit?.cancel(); liveRotationRadians = nil
+                    controller.region = CropRegion()
+                } label: {
                     Image(systemName: "arrow.counterclockwise").font(.caption2.weight(.semibold))
                 }
                 .buttonStyle(.plain).help("Reset framing")
@@ -473,34 +656,62 @@ struct ViewfinderCard: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 9).padding(.vertical, 5)
         .glassEffect(.regular, in: .capsule)
-        .help("Scroll or pinch over the preview to zoom; drag to move")
+        .help("Scroll or pinch to zoom · drag to move · ⌥-scroll (or two-finger twist) to rotate")
     }
 
     private func applyZoom(_ factor: Double) {
         guard factor > 0 else { return }
-        controller.region = CropRegion(centerX: controller.region.centerX, centerY: controller.region.centerY,
-                                       zoom: controller.region.zoom * factor)
+        let newZoom = max(0.1, currentZoom * factor)
+        liveZoom = newZoom
+        // Live to preview + injection (no per-event RootView re-render); keeps the current rotation.
+        pushLiveCrop(region(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: newZoom))
+        // Debounced commit: write the observed region once after scrolling/pinching settles.
+        zoomCommit?.cancel()
+        let work = DispatchWorkItem {
+            controller.region = region(centerX: controller.region.centerX, centerY: controller.region.centerY, zoom: newZoom)
+            liveZoom = nil
+        }
+        zoomCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    private func regionForDrag(_ translation: CGSize) -> CropRegion {
+        let start = dragStart ?? (controller.region.centerX, controller.region.centerY)
+        let zoom = max(currentZoom, 0.1)
+        let dx = Double(translation.width) / Double(Self.cardInnerWidth) / zoom
+        let dy = Double(translation.height) / Double(Self.cardHeight) / zoom
+        return region(centerX: start.x - dx, centerY: start.y - dy, zoom: zoom)
     }
 
     private var panGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                let start = dragStart ?? (controller.region.centerX, controller.region.centerY)
-                if dragStart == nil { dragStart = start }
-                let zoom = max(controller.region.zoom, 0.1)
-                let dx = Double(value.translation.width) / 328.0 / zoom
-                let dy = Double(value.translation.height) / 188.0 / zoom
-                controller.region = CropRegion(centerX: start.x - dx, centerY: start.y - dy,
-                                               zoom: controller.region.zoom)
+                if dragStart == nil { dragStart = (controller.region.centerX, controller.region.centerY) }
+                // Feed the live crop straight to the preview AND the injection (cheap locked writes the
+                // render timer + the injection pump read each frame). We do NOT mutate the observed
+                // `controller.region` here — that re-rendered the whole glassy RootView on every
+                // mouse-move, starving the preview timer (the drag stutter / fps drop).
+                pushLiveCrop(regionForDrag(value.translation))
             }
-            .onEnded { _ in dragStart = nil }
+            .onEnded { value in
+                // Commit once at the end: this is the only RootView re-render for the whole drag.
+                if dragStart != nil { controller.region = regionForDrag(value.translation) }
+                dragStart = nil
+            }
     }
 
 }
 
-/// A small phone bezel showing how the frame maps onto the selected device.
+/// A small phone bezel showing how the frame maps onto the selected device, with two controls:
+/// rotate the DEVICE (portrait⇄landscape, bezel-only) and pick which simulator's bezel to preview.
 struct DeviceFramePiP<Content: View>: View {
     let aspect: CGFloat
+    var animation: Animation? = nil
+    var isLandscape: Bool = false
+    let onToggleOrientation: () -> Void
+    let devices: [SimDevice]
+    let selectedUDID: String
+    let onSelectDevice: (String) -> Void
     @ViewBuilder var content: Content
     private let maxHeight: CGFloat = 84
     private let maxWidth: CGFloat = 100
@@ -519,7 +730,43 @@ struct DeviceFramePiP<Content: View>: View {
                 Capsule().fill(.black).frame(width: width * 0.34, height: 4).padding(.top, 4)
             }
             .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            // The phone outline turns portrait⇄landscape as the device-orientation aspect flips.
+            .animation(animation, value: aspect)
+            .overlay(alignment: .topLeading) { orientationButton.offset(x: -9, y: -9) }
+            .overlay(alignment: .topTrailing) { deviceMenu.offset(x: 9, y: -9) }
             .accessibilityLabel("Device preview")
+    }
+
+    private var orientationButton: some View {
+        Button(action: onToggleOrientation) {
+            Image(systemName: isLandscape ? "rectangle.landscape.rotate" : "rectangle.portrait.rotate")
+                .font(.system(size: 9, weight: .bold))
+        }
+        .buttonStyle(.plain).foregroundStyle(.white).frame(width: 22, height: 22)
+        .glassEffect(.regular, in: .circle)
+        .popoverTip(DeviceTip(), arrowEdge: .leading)
+        .help("Rotate the device bezel — portrait ⇄ landscape (does not rotate the image)")
+        .accessibilityLabel(isLandscape ? "Switch device to portrait" : "Switch device to landscape")
+    }
+
+    private var deviceMenu: some View {
+        Menu {
+            if devices.isEmpty {
+                Text("No simulators")
+            } else {
+                ForEach(devices, id: \.udid) { device in
+                    Button { onSelectDevice(device.udid) } label: {
+                        Label(device.name, systemImage: device.udid == selectedUDID ? "checkmark" : "iphone.gen3")
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "iphone.gen3").font(.system(size: 9, weight: .bold))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: 22, height: 22).foregroundStyle(.white)
+        .glassEffect(.regular, in: .circle)
+        .help("Choose which simulator bezel to preview")
     }
 }
 

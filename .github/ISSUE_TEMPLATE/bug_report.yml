@@ -1,0 +1,37 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Source = ...
+        2. Boot simulator / run app from Xcode ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: macOS version, Xcode version, simulator device + iOS version, source kind (image/video/camera/QR).
+      placeholder: "macOS 26.0, Xcode 26.0, iPhone 16 / iOS 26, image source"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from `log show --predicate 'subsystem == "com.fauxcam"'` or a crash report (no secrets).
+      render: shell
+    validations:
+      required: false

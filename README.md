@@ -1,6 +1,12 @@
 # FauxCam
 
+[![CI](https://github.com/mkemalgokce/ios-simulator-camera/actions/workflows/ci.yml/badge.svg)](https://github.com/mkemalgokce/ios-simulator-camera/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-blue)
+
 Feed a custom camera source — a still image, a video file, your Mac's webcam/Continuity Camera, or a QR code — into apps running in the **iOS Simulator**, where Apple provides no camera.
+
+> **Requirements:** macOS 26+ and Xcode 26+ (the menu bar app uses macOS 26 SwiftUI). The CLI/core builds with the Swift toolchain.
 
 FauxCam injects a small Objective-C dylib (`libFaux.dylib`) into the simulated app at launch (Tier A: `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES`, no permanent state), swizzles AVFoundation so the app discovers a fake front/back camera, and streams BGRA frames from a host process over an `AF_UNIX` socket. When you stop, nothing is left behind.
 
@@ -99,3 +105,16 @@ Unit tests run framework-free with fakes; integration tests inject the guest int
 ## Distribution
 
 `./Scripts/sign-app.sh [identity]` builds and code-signs the `FauxCamApp` menubar app as `dist/FauxCam.app` (ad-hoc by default; pass a Developer ID for distribution). The guest dylib is bundled into the app's `Contents/Resources` and resolved via `Bundle.main` at runtime. See the script for the notarization steps.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md). For security issues, follow
+[SECURITY.md](SECURITY.md) (please don't open a public issue).
+
+FauxCam is a **local developer tool** for the iOS Simulator only — it does not
+touch physical devices and ships nothing into your own apps.
+
+## License
+
+[MIT](LICENSE) © Mustafa Kemal Gökçe

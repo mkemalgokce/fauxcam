@@ -52,30 +52,34 @@ final class SessionController: ObservableObject {
 
     @Published var devices: [SimDevice] = []
     @Published var selectedUDID: String = ""
-    static let outputShortSide = 720
 
     @Published var sourceKind: SourceKind = .image
     @Published var region: CropRegion = .identity
     @Published var deviceAspect: Double = 9.0 / 19.5
+    /// Manual orientation override for the SELECTED device. true = landscape. Flips the preview + that
+    /// device's injected feed when the auto-detected screen orientation isn't what the user wants.
+    @Published var deviceLandscape: Bool = false
+    private var orientationCache: [String: Bool] = [:]
     @Published var imagePath: String = "" { didSet { loadPreviewImage() } }
     @Published var videoPath: String = ""
     @Published var qrText: String = ""
     @Published private(set) var previewImage: NSImage?
 
-    /// The output (and crop-box) aspect always matches the selected simulator's screen, so the fake
-    /// camera fills the device — the user only chooses WHERE and HOW MUCH of the source to show.
-    var outputAspect: Double { deviceAspect > 0 ? deviceAspect : 9.0 / 19.5 }
+    /// The selected simulator's native (portrait) screen aspect.
+    var nativeDeviceAspect: Double { deviceAspect > 0 ? deviceAspect : 9.0 / 19.5 }
 
-    /// The guest frame size, derived from the device aspect at a fixed base.
-    var outputSize: (width: Int, height: Int) {
-        let aspect = outputAspect
-        if aspect >= 1 {
-            return (even(Double(Self.outputShortSide) * aspect), Self.outputShortSide)
-        } else {
-            return (Self.outputShortSide, even(Double(Self.outputShortSide) / aspect))
-        }
+    /// The SCREEN aspect (orientation-flipped) the selected device's preview + injection use. A frame
+    /// at the device's own screen aspect FILLS that device — whether its camera view aspect-fits
+    /// (matches exactly) or aspect-fills (covers) — so the in-app preview, the bezel, and the simulator
+    /// all show the same thing. This is the single output aspect for the selected device.
+    var previewAspect: Double { deviceLandscape ? 1 / nativeDeviceAspect : nativeDeviceAspect }
+
+    func toggleDeviceOrientation() { setDeviceLandscape(!deviceLandscape) }
+    func setDeviceLandscape(_ landscape: Bool) {
+        deviceLandscape = landscape
+        if !selectedUDID.isEmpty { orientationCache[selectedUDID] = landscape }
     }
-    private func even(_ value: Double) -> Int { let n = Int(value.rounded()); return max(2, n - (n % 2)) }
+    private func restoreOrientation() { deviceLandscape = orientationCache[selectedUDID] ?? false }
 
     private let deviceProvider: SimDeviceProviding
     private let aspectProvider: DeviceScreenAspectProviding
@@ -119,6 +123,7 @@ final class SessionController: ObservableObject {
             selectedUDID = devices.first?.udid ?? ""
         }
         if selectedUDID != previousSelected, !selectedUDID.isEmpty {
+            restoreOrientation()
             refreshDeviceAspect()
         }
     }
@@ -126,6 +131,7 @@ final class SessionController: ObservableObject {
     func selectDevice(_ udid: String) {
         guard udid != selectedUDID else { return }
         selectedUDID = udid
+        restoreOrientation()
         refreshDeviceAspect()
     }
 

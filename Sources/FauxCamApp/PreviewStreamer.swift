@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import CoreGraphics
+import QuartzCore
 import FauxDomain
 import FauxAdapters
 
@@ -22,19 +23,22 @@ private struct CGImageBox: @unchecked Sendable {
     let image: CGImage
 }
 
-/// Builds a `CGImage` from a BGRA `Frame`. This allocates and copies the pixels, so it runs OFF the
-/// main actor (inside the render task) — doing it on main starved zoom/drag gestures and stuttered.
+/// Builds a `CGImage` from a BGRA `Frame`. Runs OFF the main actor (inside the render task) —
+/// doing it on main starved zoom/drag gestures and stuttered. Uses a `CGDataProvider` over a single
+/// `Data` copy instead of a `CGContext` (which copies the bitmap a second time), halving the
+/// per-frame allocation churn — sustained churn was what made the preview creep slower over time.
 private func makeCGImageBox(from frame: Frame) -> CGImageBox? {
-    var pixels = frame.pixels
+    let data = Data(frame.pixels)
+    guard let provider = CGDataProvider(data: data as CFData) else { return nil }
     let colorSpace = CGColorSpaceCreateDeviceRGB()
-    let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-    return pixels.withUnsafeMutableBytes { raw -> CGImageBox? in
-        guard let context = CGContext(
-            data: raw.baseAddress, width: frame.width, height: frame.height,
-            bitsPerComponent: 8, bytesPerRow: frame.bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo
-        ), let image = context.makeImage() else { return nil }
-        return CGImageBox(image: image)
-    }
+    let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+    guard let image = CGImage(
+        width: frame.width, height: frame.height,
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: frame.bytesPerRow,
+        space: colorSpace, bitmapInfo: bitmapInfo, provider: provider,
+        decode: nil, shouldInterpolate: false, intent: .defaultIntent
+    ) else { return nil }
+    return CGImageBox(image: image)
 }
 
 @MainActor
@@ -44,24 +48,28 @@ final class PreviewStreamer: ObservableObject {
     /// UI never knows the source kind.
     @Published private(set) var sourceImage: NSImage?
     @Published private(set) var deviceImage: NSImage?
+    /// Measured delivered frames-per-second of the preview (published ~4×/sec to keep churn low).
+    @Published private(set) var fps: Double = 0
+
+    private var lastFrameTime: CFTimeInterval = 0
+    private var emaFps: Double = 0
+    private var fpsTicksSincePublish = 0
 
     private let factory = FrameSourceFactory()
     private let cropHolder = CropHolder()
     private var source: FrameSource?
     private var descriptor: SourceDescriptor?
-    private var deviceAspect: Double = 9.0 / 19.5
+    /// The ONE output aspect both preview targets (main viewfinder + bezel) compose to — the selected
+    /// device's screen aspect, the SAME aspect that device is injected at. So what the user frames is
+    /// exactly what that simulator gets.
+    private var outputAspect: Double = 9.0 / 19.5
     private var timer: Timer?
     private var pulling = false
-
-    /// Render long-sides: the main viewfinder is shown large; the device PiP sits in an ~84pt bezel, so
-    /// rendering it at the full preview size is wasted pixel work that adds to each tick's cost.
-    private static let previewLongSide = 480.0
-    private static let devicePreviewLongSide = 180.0
 
     func setCrop(_ region: CropRegion) { cropHolder.value = region }
 
     func configure(descriptor: SourceDescriptor, deviceAspect: Double) {
-        self.deviceAspect = deviceAspect > 0 ? deviceAspect : 9.0 / 19.5
+        outputAspect = deviceAspect > 0 ? deviceAspect : 9.0 / 19.5
         if descriptor != self.descriptor || source == nil {
             self.descriptor = descriptor
             rebuild()
@@ -86,20 +94,24 @@ final class PreviewStreamer: ObservableObject {
         self.timer = timer
     }
 
+    /// Pauses frame production without tearing down the source, so reopening the window resumes from the
+    /// last frame instead of blanking to a placeholder and re-priming from frame zero. `configure`
+    /// rebuilds only when the descriptor actually changes.
     func stop() {
         timer?.invalidate()
         timer = nil
-        source = nil
-        descriptor = nil
-        sourceImage = nil
-        deviceImage = nil
+        pulling = false
+        lastFrameTime = 0
     }
 
     private func tick() {
         guard let source, !pulling else { return }
         pulling = true
-        let naturalDemand = demand(forAspect: source.naturalAspect, longSide: Self.previewLongSide)
-        let deviceDemand = demand(forAspect: deviceAspect, longSide: Self.devicePreviewLongSide)
+        // BOTH the main viewfinder and the bezel compose to the SAME output aspect (the selected
+        // device's screen aspect = the injected aspect) at different resolutions — so what the user
+        // frames is exactly what the simulator gets. Rotation/zoom/pan are letterboxed by the scaler.
+        let naturalDemand = demand(forAspect: outputAspect, longSide: OutputResolution.previewLongSide)
+        let deviceDemand = demand(forAspect: outputAspect, longSide: OutputResolution.bezelLongSide)
         Task.detached(priority: .userInitiated) {
             // Natural first: for video it decodes the frame; the device pull then reuses that same
             // frame (within the source's reuse window) so the video doesn't advance twice per tick.
@@ -119,7 +131,28 @@ final class PreviewStreamer: ObservableObject {
                     self.deviceImage = NSImage(cgImage: deviceBox.image,
                                                size: NSSize(width: deviceBox.image.width, height: deviceBox.image.height))
                 }
+                if naturalBox != nil { self.recordFrameForFPS() }
             }
+        }
+    }
+
+    /// Exponential-moving-average FPS from inter-frame deltas; publishes ~4×/sec so the on-screen
+    /// readout updates smoothly without triggering a SwiftUI pass on every frame.
+    private func recordFrameForFPS() {
+        let now = CACurrentMediaTime()
+        if lastFrameTime > 0 {
+            let delta = now - lastFrameTime
+            if delta > 0 {
+                let instant = 1.0 / delta
+                emaFps = emaFps == 0 ? instant : emaFps * 0.85 + instant * 0.15
+            }
+        }
+        lastFrameTime = now
+        fpsTicksSincePublish += 1
+        if fpsTicksSincePublish >= 6 {
+            fpsTicksSincePublish = 0
+            let rounded = (emaFps * 10).rounded() / 10
+            if abs(rounded - fps) >= 0.1 { fps = rounded }
         }
     }
 

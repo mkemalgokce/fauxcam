@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Core libraries, CLI, and the test suite. The SwiftUI menu bar app
+      # (Sources/FauxCamApp) targets macOS 26 and is built locally, not in CI —
+      # the tests do not depend on it.
+      - name: Swift test
+        run: swift test -v
+
+      # The injected guest dylib (Objective-C/C). Ad-hoc signed, no identity
+      # needed. Allowed to fail on runners without the required simulator SDK.
+      - name: Build guest dylib
+        continue-on-error: true
+        run: bash Scripts/build-dylib.sh

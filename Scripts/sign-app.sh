@@ -35,6 +35,7 @@ cp "$BINARY" "$STAGE/Contents/MacOS/FauxCam"
 cp "$ROOT/dist/libFaux.dylib" "$STAGE/Contents/Resources/libFaux.dylib"
 cp "$ROOT/Icons/FauxCam.icns" "$STAGE/Contents/Resources/FauxCam.icns"
 cp "$ROOT/Icons/appicon.png" "$STAGE/Contents/Resources/appicon.png"
+cp "$ROOT/Icons/appicon-color.png" "$STAGE/Contents/Resources/appicon-color.png"
 cat > "$STAGE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

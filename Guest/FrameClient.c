@@ -69,7 +69,10 @@ int faux_frame_client_connect(faux_frame_client *client, const char *path) {
     }
     int suppressSignalPipe = 1;
     setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressSignalPipe, sizeof(suppressSignalPipe));
-    struct timeval timeout = { .tv_sec = 2, .tv_usec = 0 };
+    // Short timeout: the pump pulls one frame per tick on its serial queue, so a stalled host must
+    // not block the queue (which also serializes start/stop) for long. The pump falls back to
+    // synthetic frames per-tick and only permanently switches after many consecutive failures.
+    struct timeval timeout = { .tv_sec = 0, .tv_usec = 200000 };
     setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     client->descriptor = descriptor;

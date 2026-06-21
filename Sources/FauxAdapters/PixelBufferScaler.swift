@@ -99,12 +99,13 @@ struct PixelBufferScaler {
     /// `region.centerX/centerY` (0...1, top-left) pick which source point sits at the frame center.
     /// Any area not covered by the source is filled black.
     func composed(_ image: CIImage, toWidth width: Int, height: Int, region: CropRegion) -> CIImage {
-        let extent = image.extent
+        let oriented = rotated(image, radians: region.rotationRadians)
+        let extent = oriented.extent
         guard extent.width > 0, extent.height > 0, extent.width.isFinite, extent.height.isFinite else { return image }
         let frameWidth = CGFloat(width), frameHeight = CGFloat(height)
         let fitScale = min(frameWidth / extent.width, frameHeight / extent.height)
         let scale = fitScale * CGFloat(region.zoom)
-        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let scaled = oriented.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
 
         // The chosen source point (centerX, centerY top-left) in scaled CoreImage (bottom-up) space.
         let pointX = (extent.origin.x + CGFloat(region.centerX) * extent.width) * scale
@@ -115,5 +116,24 @@ struct PixelBufferScaler {
         let frameRect = CGRect(x: 0, y: 0, width: frameWidth, height: frameHeight)
         let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 1)).cropped(to: frameRect)
         return placed.composited(over: black).cropped(to: frameRect)
+    }
+
+    /// Rotates clockwise by `radians` (free angle) around the image center, normalizing the result's
+    /// extent back to the origin so the fit/zoom/center math downstream stays stable. The rotated
+    /// bounding box (now an arbitrary aspect) is letterboxed into the output by the fit step.
+    /// CoreImage is bottom-up, so a negative angle reads as clockwise on screen.
+    private func rotated(_ image: CIImage, radians: Double) -> CIImage {
+        guard abs(radians) > 0.0001 else { return image }
+        let extent = image.extent
+        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return image }
+        // Rotate around the image CENTER (translate center→origin, rotate, translate back), then
+        // normalize the resulting extent to the origin so the downstream fit/center math is stable.
+        let transform = CGAffineTransform(translationX: extent.midX, y: extent.midY)
+            .rotated(by: -CGFloat(radians))
+            .translatedBy(x: -extent.midX, y: -extent.midY)
+        let turned = image.transformed(by: transform)
+        let turnedExtent = turned.extent
+        guard turnedExtent.width.isFinite, turnedExtent.height.isFinite else { return image }
+        return turned.transformed(by: CGAffineTransform(translationX: -turnedExtent.origin.x, y: -turnedExtent.origin.y))
     }
 }
