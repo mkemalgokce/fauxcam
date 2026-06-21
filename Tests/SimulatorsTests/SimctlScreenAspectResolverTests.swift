@@ -10,9 +10,14 @@ struct SimctlScreenAspectResolverTests {
         return Data(b)
     }
 
-    @Test func resolvesAspectFromScreenshot() async {
-        let resolver = SimctlScreenAspectResolver(runner: FakeProcessRunner.returning(pngHeader(width: 1170, height: 2532)))
-        let aspect = await resolver.screenAspect(forDeviceWithUDID: "ABC")
+    @Test func resolvesAspectFromScreenshotFile() async {
+        let png = pngHeader(width: 1170, height: 2532)
+        // The resolver screenshots to a temp file (last arg) and reads it back — the fake writes there.
+        let runner = FakeProcessRunner { _, args in
+            if let path = args.last { try? png.write(to: URL(fileURLWithPath: path)) }
+            return ProcessResult(standardOutput: Data(), standardError: Data(), exitCode: 0)
+        }
+        let aspect = await SimctlScreenAspectResolver(runner: runner).screenAspect(forDeviceWithUDID: "ABC")
         #expect(aspect != nil)
         #expect(abs(aspect! - 1170.0 / 2532.0) < 0.0001)
     }

@@ -68,10 +68,10 @@ struct ViewfinderCard: View {
             if needsCameraPermission {
                 permissionContent
             } else if let image = preview.sourceImage {
-                // The frame IS the camera-aspect feed every simulator receives. Show the WHOLE frame
-                // (scaledToFit, letterboxed in the card) so what the user frames here is exactly what
-                // the app gets — rotation/zoom/pan are already baked in by the pixel pipeline.
-                Image(nsImage: image).resizable().scaledToFit()
+                // The frame IS the camera-aspect feed every simulator receives. Fill the card (cropping
+                // overflow) so the viewfinder reads edge-to-edge with no letterbox gutters; the bezel PiP
+                // still shows the exact device mapping. Rotation/zoom/pan are baked in by the pipeline.
+                Image(nsImage: image).resizable().scaledToFill()
             } else {
                 ProgressView()
             }

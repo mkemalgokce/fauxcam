@@ -9,8 +9,14 @@ public struct SimctlScreenAspectResolver: ScreenAspectResolving {
     public init(runner: any ProcessRunning) { self.runner = runner }
 
     public func screenAspect(forDeviceWithUDID udid: String) async -> Double? {
-        guard let result = try? await runner.run(xcrun, arguments: ["simctl", "io", udid, "screenshot", "--type", "png", "-"]),
-              result.isSuccess else { return nil }
-        return PNGHeader.aspect(of: result.standardOutput)
+        // `simctl io screenshot -` does NOT stream to stdout (it writes a file literally named "-"), so
+        // capture to a temp file and read it back. The IHDR is all we need.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fauxcam-\(udid)-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let result = try? await runner.run(xcrun, arguments: ["simctl", "io", udid, "screenshot", "--type", "png", url.path]),
+              result.isSuccess,
+              let data = try? Data(contentsOf: url) else { return nil }
+        return PNGHeader.aspect(of: data)
     }
 }

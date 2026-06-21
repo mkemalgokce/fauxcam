@@ -55,12 +55,13 @@ struct SourceTabBar: View {
             }
             .frame(maxWidth: .infinity).padding(.vertical, 8)
             .foregroundStyle(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
-            .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
-            }
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain).accessibilityLabel(tab.title)
+        .buttonStyle(.plain)
+        // Each tab is its own Liquid Glass segment (selected = accent-tinted glass); the surrounding
+        // GlassEffectContainer lets them morph as the selection moves.
+        .glassEffect(selected ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
+                     in: .rect(cornerRadius: 9))
+        .accessibilityLabel(tab.title)
     }
 }

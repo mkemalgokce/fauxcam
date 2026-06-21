@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        FauxCamTour.configure()   // TipKit must be configured before any tip can present
         camera.refresh()
         startPolling()
     }
