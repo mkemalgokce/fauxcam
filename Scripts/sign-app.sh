@@ -34,8 +34,10 @@ mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
 cp "$BINARY" "$STAGE/Contents/MacOS/FauxCam"
 cp "$ROOT/dist/libFaux.dylib" "$STAGE/Contents/Resources/libFaux.dylib"
 cp "$ROOT/dist/FauxCam.icns" "$STAGE/Contents/Resources/FauxCam.icns"
-# Brand art (faux_logo + menubar glyph) ships in the SwiftPM resource bundle of the
-# Presentation module; copy it next to the app's resources so Bundle.module resolves it.
+# Brand art (faux_logo + menubar glyph). Copy the PNGs DIRECTLY into Contents/Resources so the app
+# loads them via Bundle.main (Brand resolves there first) — robust to how the building toolchain
+# structures the SwiftPM resource bundle. Also copy the resource bundle itself for completeness.
+cp "$ROOT/Modules/Presentation/Presentation/Resources/"*.png "$STAGE/Contents/Resources/"
 BIN_DIR="$(dirname "$BINARY")"
 cp -R "$BIN_DIR/FauxCam_Presentation.bundle" "$STAGE/Contents/Resources/FauxCam_Presentation.bundle"
 cat > "$STAGE/Contents/Info.plist" <<PLIST
