@@ -215,7 +215,7 @@ public struct CommandRunner: Sendable {
           serve [socket-path] [--source <source>]
           run [--device <udid>] [--source <source>] <bundle-id>
 
-        <source>: image | video:<path> | webcam | qr:<text>
+        <source>: image | image:<path> | video:<path> | webcam | qr:<text>
         """)
         return .usageError
     }

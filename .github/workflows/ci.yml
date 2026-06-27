@@ -26,9 +26,9 @@ jobs:
           swift --version
           xcodebuild -version
 
-      # Core libraries and the test suite. The SwiftUI menu bar app
-      # (Apps/MenuBarApp) targets macOS 26 and is built locally, not in CI —
-      # the tests do not depend on it.
+      # The menu-bar app (Apps/MenuBarApp) and faux CLI are not linked by the
+      # tests, so they are built explicitly in the steps below to catch
+      # regressions.
       - name: Swift test
         run: swift test -v
 
@@ -36,6 +36,11 @@ jobs:
       # build it explicitly to catch CLI regressions.
       - name: Build faux CLI
         run: swift build --product faux
+
+      # The menu-bar app is also unlinked by the tests; build it to catch app
+      # regressions before a release tag does.
+      - name: Build FauxCam app
+        run: swift build --product FauxCamApp
 
       # The injected guest dylib (Objective-C/C). Ad-hoc signed, no identity
       # needed. Allowed to fail on runners without the required simulator SDK.

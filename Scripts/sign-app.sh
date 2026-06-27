@@ -1,14 +1,23 @@
 #!/bin/bash
-# Build and code-sign the FauxCam menubar app for distribution.
+# Build, sign and package the FauxCam menu-bar app for distribution.
+#
+# This script handles the menu-bar app ONLY. The `faux` CLI is packaged
+# separately by Scripts/package-cli.sh.
 #
 # Usage: ./Scripts/sign-app.sh [signing-identity]
 #   signing-identity defaults to "-" (ad-hoc, local use only).
 #   For distribution pass a Developer ID, e.g.:
 #     ./Scripts/sign-app.sh "Developer ID Application: Your Name (TEAMID)"
 #
-# Notarization (requires a Developer ID + an App Store Connect API key or
-# app-specific password) is documented at the end of this script; it is not
-# performed automatically because it needs network access and credentials.
+# Outputs:
+#   dist/FauxCam.app   the assembled, signed app bundle
+#   dist/FauxCam.dmg   a modern disk image (app + Applications drop-link)
+#   dist/FauxCam.zip   an app zip (ad-hoc path only, for convenience)
+#
+# Notarization runs only when NOTARIZE_PROFILE names a stored notarytool
+# keychain profile AND a Developer ID identity is used. The app is notarized and
+# stapled BEFORE the DMG is built, so the copy inside the DMG carries its ticket,
+# then the DMG is notarized and stapled too.
 
 set -euo pipefail
 
@@ -17,12 +26,69 @@ IDENTITY="${1:--}"
 BUILD_CONFIG="release"
 APP_NAME="FauxCam.app"
 STAGE="$ROOT/dist/$APP_NAME"
+DMG="$ROOT/dist/FauxCam.dmg"
+APP_ZIP="$ROOT/dist/FauxCam.zip"
+ENTITLEMENTS="$ROOT/dist/FauxCam.entitlements"
+DMG_BACKGROUND="$ROOT/Assets/dmg/background.png"
+VOLUME_NAME="FauxCam"
+
+build_disk_image() {
+  local dmg_path="$1"
+  rm -f "$dmg_path"
+  if command -v create-dmg >/dev/null 2>&1; then
+    local source_dir="$ROOT/dist/.dmg-src"
+    rm -rf "$source_dir"; mkdir -p "$source_dir"
+    cp -R "$STAGE" "$source_dir/$APP_NAME"
+    create-dmg \
+      --volname "$VOLUME_NAME" \
+      --background "$DMG_BACKGROUND" \
+      --window-pos 200 120 \
+      --window-size 540 380 \
+      --icon-size 120 \
+      --icon "$APP_NAME" 140 230 \
+      --hide-extension "$APP_NAME" \
+      --app-drop-link 400 230 \
+      "$dmg_path" \
+      "$source_dir" || true
+    rm -rf "$source_dir"
+    [ -f "$dmg_path" ] || { echo "ERROR: create-dmg did not produce $dmg_path"; exit 1; }
+  else
+    echo "NOTE: create-dmg not installed (brew install create-dmg) — using a plain hdiutil DMG."
+    local stage_dir="$ROOT/dist/.dmg-stage"
+    rm -rf "$stage_dir"; mkdir -p "$stage_dir"
+    cp -R "$STAGE" "$stage_dir/$APP_NAME"
+    ln -s /Applications "$stage_dir/Applications"
+    hdiutil create -volname "$VOLUME_NAME" -srcfolder "$stage_dir" -ov -format UDZO "$dmg_path" >/dev/null
+    rm -rf "$stage_dir"
+  fi
+  echo "==> DMG at $dmg_path"
+}
+
+notarize_and_staple() {
+  local target="$1"
+  echo "==> Submitting $(basename "$target") for notarization (contacts Apple and waits)"
+  if [[ "$target" == *.app ]]; then
+    local upload_zip="$ROOT/dist/.notarize-upload.zip"
+    ditto -c -k --sequesterRsrc --keepParent "$target" "$upload_zip"
+    xcrun notarytool submit "$upload_zip" --keychain-profile "$NOTARIZE_PROFILE" --wait
+    rm -f "$upload_zip"
+  else
+    xcrun notarytool submit "$target" --keychain-profile "$NOTARIZE_PROFILE" --wait
+  fi
+  xcrun stapler staple "$target"
+  xcrun stapler validate "$target"
+}
 
 echo "==> Building app icon + menubar glyph"
 "$ROOT/Scripts/build-icons.sh"
 
 echo "==> Building guest dylib"
 "$ROOT/Scripts/build-dylib.sh"
+
+if [ ! -s "$DMG_BACKGROUND" ]; then
+  echo "==> Generating DMG background"
+  swift "$ROOT/Scripts/make-dmg-background.swift"
+fi
 
 echo "==> Building FauxCamApp ($BUILD_CONFIG)"
 swift build -c "$BUILD_CONFIG" --product FauxCamApp --package-path "$ROOT"
@@ -60,7 +126,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-cat > "$ROOT/dist/FauxCam.entitlements" <<'ENT'
+cat > "$ENTITLEMENTS" <<'ENT'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -73,22 +139,17 @@ ENT
 echo "==> Code-signing with identity: $IDENTITY"
 xattr -cr "$STAGE"
 codesign --force --options runtime --sign "$IDENTITY" "$STAGE/Contents/Resources/libFaux.dylib"
-codesign --force --options runtime --entitlements "$ROOT/dist/FauxCam.entitlements" --sign "$IDENTITY" "$STAGE"
+codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$STAGE"
 codesign --verify --deep --strict "$STAGE"
 codesign -d --entitlements - "$STAGE" 2>&1 | grep -q "device.camera" || { echo "ERROR: camera entitlement missing"; exit 1; }
 /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$STAGE/Contents/Info.plist" >/dev/null
 echo "==> Signed bundle at $STAGE (hardened runtime + camera entitlement)"
 
-echo "==> Building faux CLI ($BUILD_CONFIG)"
-swift build -c "$BUILD_CONFIG" --product faux --package-path "$ROOT"
-FAUX_BINARY="$(swift build -c "$BUILD_CONFIG" --product faux --package-path "$ROOT" --show-bin-path)/faux"
-FAUX_CLI="$ROOT/dist/faux"
-cp "$FAUX_BINARY" "$FAUX_CLI"
-codesign --force --options runtime --entitlements "$ROOT/dist/FauxCam.entitlements" --sign "$IDENTITY" "$FAUX_CLI"
-codesign --verify --strict "$FAUX_CLI"
-echo "==> Signed faux CLI at $FAUX_CLI (hardened runtime + camera entitlement)"
-
 if [[ "$IDENTITY" == "-" ]]; then
+  build_disk_image "$DMG"
+  rm -f "$APP_ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$APP_ZIP"
+  echo "==> App zip at $APP_ZIP"
   cat <<'NOTE'
 
 NOTE: ad-hoc signed (local use only — Gatekeeper will block it on other Macs).
@@ -103,31 +164,13 @@ To ship to production:
 NOTE
 else
   echo "==> Distribution build with Developer ID"
-
-  echo "==> Building DMG (app + faux CLI)"
-  DMG="$ROOT/dist/FauxCam.dmg"
-  DMG_STAGE="$ROOT/dist/.dmg-stage"
-  rm -f "$DMG"; rm -rf "$DMG_STAGE"; mkdir -p "$DMG_STAGE"
-  cp -R "$STAGE" "$DMG_STAGE/$APP_NAME"
-  cp "$FAUX_CLI" "$DMG_STAGE/faux"
-  ln -s /Applications "$DMG_STAGE/Applications"
-  hdiutil create -volname "FauxCam" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG" >/dev/null
-  rm -rf "$DMG_STAGE"
-  echo "==> DMG at $DMG"
-
   if [[ -n "${NOTARIZE_PROFILE:-}" ]]; then
-    # Notarize the DMG itself: notarytool inspects every nested Mach-O (the app,
-    # its bundled libFaux.dylib, and the standalone faux CLI), so one submission
-    # covers all distributed code. Staple both the DMG and the app so first launch
-    # works offline.
-    echo "==> Submitting the DMG for notarization (this contacts Apple and waits)"
-    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARIZE_PROFILE" --wait
-    xcrun stapler staple "$STAGE"
-    xcrun stapler staple "$DMG"
-    xcrun stapler validate "$STAGE"
-    xcrun stapler validate "$DMG"
-    echo "==> Notarized + stapled (app, faux CLI, DMG)"
+    notarize_and_staple "$STAGE"
+    build_disk_image "$DMG"
+    notarize_and_staple "$DMG"
+    echo "==> Notarized + stapled (app, DMG)"
   else
-    echo "NOTE: Developer ID signed but NOT notarized. Set NOTARIZE_PROFILE=<profile> to notarize the DMG."
+    build_disk_image "$DMG"
+    echo "NOTE: Developer ID signed but NOT notarized. Set NOTARIZE_PROFILE=<profile> to notarize."
   fi
 fi

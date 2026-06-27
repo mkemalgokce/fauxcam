@@ -1,16 +1,15 @@
 import AppKit
 
-/// FauxCam brand artwork. Resolved WITHOUT `Bundle.module`: its generated accessor `fatalError`s when the
-/// resource bundle isn't where the building toolchain expects, and those expected locations differ between
-/// Swift versions (6.3 looks at the `.app` root, 6.4 at `Contents/Resources`). Instead the art is loaded
-/// from `Bundle.main` (the assembled `.app` carries the PNGs directly in `Contents/Resources`) and, for
-/// `swift run` / previews / tests, from the SwiftPM resource bundle found via a non-fatal lookup.
+/// FauxCam brand artwork. The assembled `.app` carries the PNGs directly in `Contents/Resources`, so it
+/// resolves them via `Bundle.main` and never touches the SwiftPM `Bundle.module` accessor — which
+/// `fatalError`s when the resource bundle isn't where the building toolchain expects (Swift 6.3 probes the
+/// `.app` root, 6.4 `Contents/Resources`). `Bundle.module` is consulted only as a lazy fallback for
+/// `swift run` / previews / tests, where it resolves correctly and is never the shipped path.
 public enum Brand {
     private static let logoResourceName = "faux_logo"
     private static let menuBarGlyphResourceName = "menubar"
     private static let menuBarGlyphFallbackSymbol = "camera.aperture"
     private static let accessibilityName = "FauxCam"
-    private static let resourceBundleName = "FauxCam_Presentation"
 
     /// The full-colour fox + lens mark used as the in-app logo (settings header, onboarding).
     public static var logo: NSImage? { image(named: logoResourceName) }
@@ -34,28 +33,13 @@ public enum Brand {
         if let url = Bundle.main.url(forResource: resourceName, withExtension: "png") {
             return NSImage(contentsOf: url)
         }
-        if let url = resourceBundle?.url(forResource: resourceName, withExtension: "png") {
-            return NSImage(contentsOf: url)
-        }
-        return nil
+        return moduleImage(named: resourceName)
     }
 
-    private final class BundleFinder {}
-
-    /// The SwiftPM resource bundle, located by probing the usual directories directly — never via
-    /// `Bundle.module`, so a missing/relocated bundle yields `nil` instead of a `fatalError`.
-    private static let resourceBundle: Bundle? = {
-        let candidateDirectories = [
-            Bundle.main.resourceURL,
-            Bundle.main.bundleURL,
-            Bundle(for: BundleFinder.self).resourceURL,
-            Bundle(for: BundleFinder.self).bundleURL,
-        ]
-        for case let directory? in candidateDirectories {
-            if let bundle = Bundle(url: directory.appendingPathComponent("\(resourceBundleName).bundle")) {
-                return bundle
-            }
-        }
-        return nil
-    }()
+    /// Reached only when `Bundle.main` lacks the resource — i.e. `swift run` / previews / tests, never the
+    /// shipped `.app`. So `Bundle.module`'s `fatalError`-on-miss accessor is only evaluated in contexts
+    /// where it resolves the bundle correctly.
+    private static func moduleImage(named resourceName: String) -> NSImage? {
+        Bundle.module.url(forResource: resourceName, withExtension: "png").flatMap(NSImage.init(contentsOf:))
+    }
 }
