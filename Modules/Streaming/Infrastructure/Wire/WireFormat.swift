@@ -1,12 +1,18 @@
 import Foundation
 
-/// The on-the-wire contract (mirror of Shared/faux_wire.h). All multi-byte integers little-endian.
+/// The on-the-wire contract (mirror of Shared/faux_wire.h). Multi-byte integers are encoded in the
+/// order the bytes appear here, which is identical to host byte order on the little-endian Apple
+/// platforms host and guest share. Revisit with explicit byte-swapping if it ever crosses architectures.
 public enum Wire {
     public static let magic: UInt32 = 0x4641_5558   // "FAUX"
     public static let version: UInt16 = 1
     public static let headerByteCount = 12
+    public static let helloBodyByteCount = 8
     public static let demandBodyByteCount = 20
     public static let frameHeaderByteCount = 36
+
+    private static let bytesPerMebibyte: UInt32 = 1 << 20
+    public static let maxFrameBodyByteCount: UInt32 = 256 * bytesPerMebibyte
 
     public enum MessageType: UInt16, Sendable { case hello = 1, demand = 2, frame = 3, bye = 4 }
 }

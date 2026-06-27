@@ -13,6 +13,8 @@ public final class VideoContent: ImageContent, @unchecked Sendable {
     private let endObserver: NSObjectProtocol
     private let lastImage = OSAllocatedUnfairLock<CIImage?>(initialState: nil)
     private let aspect = OSAllocatedUnfairLock<Double>(initialState: 16.0 / 9.0)
+    private let log = Logger(subsystem: "com.fauxcam", category: "video")
+    private let hasLoggedFailure = OSAllocatedUnfairLock<Bool>(initialState: false)
 
     public var naturalAspect: Double { aspect.withLock { $0 } }
 
@@ -52,6 +54,18 @@ public final class VideoContent: ImageContent, @unchecked Sendable {
             return SourceImage(image: image, presentationTimeNanoseconds: nanos)
         }
         if let last = lastImage.withLock({ $0 }) { return SourceImage(image: last) }
+        logFailureOnce()
         return SourceImage(image: CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 9)))
+    }
+
+    private func logFailureOnce() {
+        guard let item = player.currentItem, item.status == .failed else { return }
+        let description = String(describing: item.error)
+        let log = self.log
+        hasLoggedFailure.withLock { logged in
+            guard !logged else { return }
+            logged = true
+            log.error("video source failed, serving black frames: \(description, privacy: .public)")
+        }
     }
 }

@@ -16,4 +16,8 @@ struct MachOParseTests {
         #expect(MachOParse.isAdHocSigned(fromCodesign: "Signature=adhoc"))
         #expect(!MachOParse.isAdHocSigned(fromCodesign: "Authority=Developer ID Application"))
     }
+
+    @Test func rejectsLinkerSignedAsAdHoc() {
+        #expect(!MachOParse.isAdHocSigned(fromCodesign: "Signature=adhoc\nflags=0x20002(adhoc,linker-signed)"))
+    }
 }

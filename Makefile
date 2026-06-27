@@ -2,10 +2,13 @@ DYLIB := dist/libFaux.dylib
 FIXTURE_BUNDLE_ID ?= com.fauxcam.fixture
 DEVICE ?= booted
 
-.PHONY: dylib verify doctor fixture smoke test clean
+.PHONY: dylib build-cli verify doctor fixture smoke test clean
 
 dylib:
 	./Scripts/build-dylib.sh
+
+build-cli:
+	swift build --product faux
 
 verify: dylib
 	./Scripts/verify-dylib.sh "$(DYLIB)"

@@ -13,9 +13,13 @@ enum LldbInitBlock {
 
     static func removing(from content: String) -> String {
         var lines = content.components(separatedBy: "\n")
-        guard let b = lines.firstIndex(where: { $0.contains(begin) }),
-              let e = lines.firstIndex(where: { $0.contains(end) }), b <= e else { return content }
-        lines.removeSubrange(b...e)
+        while let blockStart = lines.firstIndex(where: { $0.contains(begin) }) {
+            guard let blockEnd = lines[blockStart...].firstIndex(where: { $0.contains(end) }) else {
+                lines.removeSubrange(blockStart...)   // orphan begin (no matching end): strip to EOF
+                break
+            }
+            lines.removeSubrange(blockStart...blockEnd)
+        }
         return lines.joined(separator: "\n")
     }
 }

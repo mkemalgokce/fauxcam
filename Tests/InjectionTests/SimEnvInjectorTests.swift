@@ -3,14 +3,21 @@ import Foundation
 @testable import Injection
 
 struct SimEnvInjectorTests {
-    @Test func installSetsDyldAndFrameSize() async {
+    @Test func installSetsDyldAndFrameSizeAndReportsSuccess() async {
         let runner = RecordingRunner()
-        await SimEnvInjector(runner: runner).install(onDevices: ["ABC"], dylibPath: "/x/libFaux.dylib",
-                                                     frameSize: FrameSize(width: 720, height: 1560, fps: 30))
+        let succeeded = await SimEnvInjector(runner: runner).install(onDevices: ["ABC"], dylibPath: "/x/libFaux.dylib",
+                                                                     frameSize: FrameSize(width: 720, height: 1560, fps: 30))
+        #expect(succeeded == ["ABC"])
         let calls = await runner.calls
         #expect(calls.contains { $0.contains("setenv") && $0.contains("DYLD_INSERT_LIBRARIES") && $0.contains("/x/libFaux.dylib") })
         #expect(calls.contains { $0.contains("setenv") && $0.contains("FAUXCAM_WIDTH") && $0.contains("720") })
         #expect(calls.contains { $0.contains("setenv") && $0.contains("FAUXCAM_HEIGHT") && $0.contains("1560") })
+    }
+
+    @Test func installOmitsDeviceWhenSetenvExitsNonZero() async {
+        let succeeded = await SimEnvInjector(runner: FailingRunner()).install(onDevices: ["ABC"], dylibPath: "/x/libFaux.dylib",
+                                                                              frameSize: FrameSize(width: 720, height: 1560, fps: 30))
+        #expect(succeeded.isEmpty)
     }
 
     @Test func uninstallUnsetsEverything() async {

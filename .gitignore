@@ -8,15 +8,27 @@ DerivedData/
 *.xcscmblueprint
 xcuserdata/
 *.moved-aside
+*.xcresult/
 
 # Swift Package Manager
 .build/
 .swiftpm/
+Package.pins
+
+# Instruments / profiling
+*.trace/
+*.profraw
+*.profdata
 
 # FauxCam build artifacts
 dist/
 *.dylib
-
 Fixture/FauxFixture.app/
 Fixture/build/
 .build-faux/
+
+# Stray compiled binaries must never be committed (this is a dylib-injection tool).
+# Track sources only; ad-hoc test executables built at the repo root are ignored.
+*.o
+*.a
+a.out

@@ -12,20 +12,30 @@ concurrency:
 jobs:
   test:
     name: Build & Test
-    runs-on: macos-latest
+    # Pinned to the macOS 26 image: Package.swift needs Swift tools 6.4 and the
+    # menu-bar app/CLI target .macOS(.v26); an older default Xcode fails to resolve the manifest.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app || true
 
       - name: Toolchain
         run: |
           swift --version
           xcodebuild -version
 
-      # Core libraries, CLI, and the test suite. The SwiftUI menu bar app
-      # (Sources/FauxCamApp) targets macOS 26 and is built locally, not in CI —
+      # Core libraries and the test suite. The SwiftUI menu bar app
+      # (Apps/MenuBarApp) targets macOS 26 and is built locally, not in CI —
       # the tests do not depend on it.
       - name: Swift test
         run: swift test -v
+
+      # The faux CLI is an executable product the test suite does not link, so
+      # build it explicitly to catch CLI regressions.
+      - name: Build faux CLI
+        run: swift build --product faux
 
       # The injected guest dylib (Objective-C/C). Ad-hoc signed, no identity
       # needed. Allowed to fail on runners without the required simulator SDK.

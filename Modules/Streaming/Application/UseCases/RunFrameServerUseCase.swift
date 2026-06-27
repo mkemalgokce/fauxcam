@@ -15,7 +15,7 @@ public struct RunFrameServerUseCase: Sendable {
     }
 
     public func run() async {
-        await withTaskGroup(of: Void.self) { group in
+        await withDiscardingTaskGroup { group in
             for await transport in server.clients() {
                 let source = source, pool = pool
                 group.addTask {

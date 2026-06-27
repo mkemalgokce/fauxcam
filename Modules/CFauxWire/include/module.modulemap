@@ -1,0 +1,5 @@
+module CFauxWire {
+    header "../../../Shared/faux_wire.h"
+    header "faux_wire_paths.h"
+    export *
+}

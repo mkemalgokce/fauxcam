@@ -21,4 +21,20 @@ struct LldbInitBlockTests {
     @Test func removeNoopWhenAbsent() {
         #expect(LldbInitBlock.removing(from: "nothing here") == "nothing here")
     }
+
+    @Test func removeStripsBlockWithOrphanEndMarkerBefore() {
+        let block = LldbInitBlock.inserting(sourcePath: "/p", into: "keep me\n")
+        let withOrphanEnd = LldbInitBlock.end + "\n" + block
+        let removed = LldbInitBlock.removing(from: withOrphanEnd)
+        #expect(!removed.contains(LldbInitBlock.begin))
+        #expect(removed.contains("keep me"))
+    }
+
+    @Test func removeStripsBlockWithOrphanBeginMarkerAfter() {
+        let block = LldbInitBlock.inserting(sourcePath: "/p", into: "keep me\n")
+        let withOrphanBegin = block + LldbInitBlock.begin + "\n"
+        let removed = LldbInitBlock.removing(from: withOrphanBegin)
+        #expect(!removed.contains(LldbInitBlock.begin))
+        #expect(removed.contains("keep me"))
+    }
 }

@@ -9,6 +9,7 @@ public struct SimctlScreenAspectResolver: ScreenAspectResolving {
     public init(runner: any ProcessRunning) { self.runner = runner }
 
     public func screenAspect(forDeviceWithUDID udid: String) async -> Double? {
+        guard !udid.isEmpty else { return nil }
         // `simctl io screenshot -` does NOT stream to stdout (it writes a file literally named "-"), so
         // capture to a temp file and read it back. The IHDR is all we need.
         let url = FileManager.default.temporaryDirectory

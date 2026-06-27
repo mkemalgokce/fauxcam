@@ -51,7 +51,7 @@ public final class SessionModel {
 
     // MARK: Orientation / aspect
 
-    public private(set) var deviceAspect: Double = 9.0 / 19.5
+    public private(set) var deviceAspect: Double = OutputResolution.defaultPortraitAspect
     /// Manual orientation override for the SELECTED device. true = landscape. Flips the preview + that
     /// device's injected feed when the auto-detected screen orientation isn't what the user wants.
     public var deviceLandscape: Bool = false
@@ -71,6 +71,7 @@ public final class SessionModel {
     private let injection: AutoInjectionService
     private let pool: any BufferPooling
     private let webcam: WebcamCaptureSession
+    private let settings: SettingsModel
 
     private var orientationCache: [String: Bool] = [:]
     private var aspectCache: [String: Double] = [:]
@@ -85,7 +86,8 @@ public final class SessionModel {
         aspects: any ScreenAspectResolving,
         injection: AutoInjectionService,
         pool: any BufferPooling,
-        webcam: WebcamCaptureSession
+        webcam: WebcamCaptureSession,
+        settings: SettingsModel
     ) {
         self.factory = factory
         self.switchable = switchable
@@ -95,6 +97,7 @@ public final class SessionModel {
         self.injection = injection
         self.pool = pool
         self.webcam = webcam
+        self.settings = settings
         rebuildSource()
     }
 
@@ -113,7 +116,7 @@ public final class SessionModel {
     public var selectedDevice: SimDevice? { devices.first { $0.udid == selectedUDID } }
 
     /// The selected simulator's native (portrait) screen aspect.
-    public var nativeDeviceAspect: Double { deviceAspect > 0 ? deviceAspect : 9.0 / 19.5 }
+    public var nativeDeviceAspect: Double { deviceAspect > 0 ? deviceAspect : OutputResolution.defaultPortraitAspect }
 
     /// The SCREEN aspect (orientation-flipped) used by both preview + injection for the selected device.
     /// A frame at this aspect fills that device, so preview, bezel, and simulator all match.
@@ -189,9 +192,27 @@ public final class SessionModel {
                 lastError = "No booted simulators — boot one to start injecting."
                 return
             }
-            await injection.enable(source: switchable, pool: pool, devices: udids)
+            applyStartResult(await injection.enable(source: switchable, pool: pool, devices: udids))
+        }
+    }
+
+    /// Re-runs auto-injection the moment the user accepts onboarding, so the consent gate releases
+    /// immediately instead of waiting for the next poll tick.
+    public func onboardingDidComplete() {
+        Task { await autoInject() }
+    }
+
+    private func applyStartResult(_ result: InjectionStartResult) {
+        switch result {
+        case .active:
             isInjecting = true
             lastError = nil
+        case .activeWithoutXcodeHook(let reason):
+            isInjecting = true
+            lastError = reason
+        case .failed(let reason):
+            isInjecting = false
+            lastError = reason
         }
     }
 
@@ -275,16 +296,16 @@ public final class SessionModel {
         await autoInject()
     }
 
-    /// Auto mode (legacy behavior): every booted simulator stays injected with NO manual Start. Enables
-    /// on the first booted device, then just syncs newly-booted / shut-down sims on later ticks.
+    /// Auto mode (legacy behavior): every booted simulator stays injected with NO manual Start. Gated on
+    /// onboarding consent — the launchd DYLD variable is never set before the user taps Get Started.
+    /// Enables on the first booted device, then just syncs newly-booted / shut-down sims on later ticks.
     private func autoInject() async {
+        guard settings.hasOnboarded else { return }
         let udids = devices.map(\.udid)
         if isInjecting {
             await injection.sync(devices: udids)
         } else if !udids.isEmpty {
-            await injection.enable(source: switchable, pool: pool, devices: udids)
-            isInjecting = true
-            lastError = nil
+            applyStartResult(await injection.enable(source: switchable, pool: pool, devices: udids))
         }
     }
 

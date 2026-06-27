@@ -18,6 +18,18 @@ public final class WebcamCaptureSession: NSObject, AVCaptureVideoDataOutputSampl
     public var latestImage: CIImage? { latest.withLock { $0 } }
     public var aspect: Double { aspectLock.withLock { $0 } }
 
+    /// Whether a camera could plausibly deliver frames: a device exists and access isn't denied or
+    /// restricted. `.notDetermined` counts as available — the session prompts and retries once granted.
+    public var isCameraAvailable: Bool {
+        let hasDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
+            ?? AVCaptureDevice.default(for: .video)
+        guard hasDevice != nil else { return false }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .denied, .restricted: return false
+        default: return true
+        }
+    }
+
     /// Idempotent: configures (adding the camera input once permission allows) then starts running.
     public func start() {
         configureIfNeeded()
@@ -52,7 +64,8 @@ public final class WebcamCaptureSession: NSObject, AVCaptureVideoDataOutputSampl
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                               from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        latest.withLock { $0 = CIImage(cvPixelBuffer: pixelBuffer) }
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        latest.withLock { $0 = image }
         let w = Double(CVPixelBufferGetWidth(pixelBuffer)), h = Double(CVPixelBufferGetHeight(pixelBuffer))
         if h > 0 { aspectLock.withLock { $0 = w / h } }
     }

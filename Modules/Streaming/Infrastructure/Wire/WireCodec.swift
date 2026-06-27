@@ -3,6 +3,8 @@ import Kernel
 /// Serializes a `Frame` to a FRAME message and parses a `Demand` from a DEMAND body. Header framing +
 /// little-endian fields live here; the pixel payload is delegated to a `FrameEncoding` STRATEGY.
 public struct WireCodec: Sendable {
+    private static let maxDemandDimension: UInt32 = 8192
+
     private let encoding: any FrameEncoding
     private let rules: WireRuleChain
 
@@ -23,6 +25,9 @@ public struct WireCodec: Sendable {
         var r = ByteReader(body)
         let position = try r.u32(), width = try r.u32(), height = try r.u32()
         _ = try r.u32(); _ = try r.u32()   // fps + pixelFormat — not surfaced into the domain Demand
+        guard width > 0, height > 0,
+              width <= Self.maxDemandDimension, height <= Self.maxDemandDimension
+        else { throw WireError.malformed }
         return Demand(position: CameraPosition(wire: position), requestedWidth: Int(width), requestedHeight: Int(height))
     }
 

@@ -68,19 +68,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let preview: PreviewModel
     let session: SessionModel
     let camera = CameraAuthorization()
-    let settings = SettingsModel()
+    let settings: SettingsModel
 
     // Concretes owned for the app's lifetime.
     private let cropStore: CropStore
     private let injection: AutoInjectionService
+    private let simulators: any SimulatorRepository
 
     private var pollTask: Task<Void, Never>?
-    private var lastBezelAspect: Double = 9.0 / 19.5
+    private var lastBezelAspect: Double = OutputResolution.defaultPortraitAspect
 
-    private static let socketDirectory = "/private/tmp/com.fauxcam"
+    private static let dylibResourceName = "libFaux"
+    private static let dylibFileExtension = "dylib"
+    private static let developmentDylibRelativePath = "dist/libFaux.dylib"
 
     override init() {
-        try? FileManager.default.createDirectory(atPath: Self.socketDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: FauxSocketPaths.directory, withIntermediateDirectories: true)
 
         let pool = RecyclingBufferPool()
         let cropStore = CropStore()
@@ -91,36 +94,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let runner = FoundationProcessRunner()
         let simulators = SimctlSimulatorRepository(runner: runner)
         let aspects = SimctlScreenAspectResolver(runner: runner)
-        let dylibPath = Bundle.main.path(forResource: "libFaux", ofType: "dylib") ?? ""
-        let server = UnixSocketServer(path: Self.socketDirectory + "/auto.sock")
+        let settings = SettingsModel()
+        let dylibPath = Self.resolveDylibPath()
+        let server = UnixSocketServer(path: FauxSocketPaths.autoServer)
         let injection = AutoInjectionService(server: server, env: SimEnvInjector(runner: runner),
-                                             xcode: LldbHookInstaller(), aspects: aspects, dylibPath: dylibPath)
+                                             xcode: LldbHookInstaller(), aspects: aspects, dylibPath: dylibPath,
+                                             fps: settings.autoFps, socketDirectory: FauxSocketPaths.directory)
 
         self.cropStore = cropStore
         self.injection = injection
+        self.simulators = simulators
+        self.settings = settings
 
         // The preview opens at the default portrait phone aspect; device-aspect feedback re-sizes the
         // bezel + viewfinder as the selected simulator / orientation changes (see `applyDeviceAspect`).
         self.preview = PreviewModel(source: switchable, cropStore: cropStore,
-                                    outputAspect: 9.0 / 19.5)
+                                    outputAspect: OutputResolution.defaultPortraitAspect)
         self.session = SessionModel(factory: factory, switchable: switchable, cropStore: cropStore,
                                     simulators: simulators, aspects: aspects, injection: injection,
-                                    pool: pool, webcam: webcam)
+                                    pool: pool, webcam: webcam, settings: settings)
         super.init()
+    }
+
+    /// The guest dylib path: the bundled resource in a packaged `.app`, falling back to `dist/libFaux.dylib`
+    /// under the current directory so `swift run FauxCamApp` from the repo root injects without packaging.
+    private static func resolveDylibPath() -> String {
+        if let bundled = Bundle.main.url(forResource: dylibResourceName, withExtension: dylibFileExtension),
+           FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled.path
+        }
+        return URL(fileURLWithPath: developmentDylibRelativePath,
+                   relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+            .standardizedFileURL.path
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         FauxCamTour.configure()   // TipKit must be configured before any tip can present
         camera.refresh()
-        startPolling()
+        Task { [injection, simulators] in
+            let booted = (try? await simulators.bootedDevices()) ?? []
+            await injection.cleanLeftover(devices: booted.map(\.udid))
+            self.startPolling()
+        }
     }
 
+    /// Block the quit path until both vectors are removed: a fire-and-forget `Task` could let the process
+    /// exit with DYLD/lldbinit still set. The disable runs on a DETACHED task so it never needs the
+    /// main actor this `wait()` is parking on (no deadlock). The wait is BOUNDED so a hung `simctl`
+    /// can't freeze quit forever — past the deadline we exit best-effort rather than never returning.
     func applicationWillTerminate(_ notification: Notification) {
         pollTask?.cancel()
         pollTask = nil
         preview.stop()
-        Task { await injection.disable() }
+        let teardownComplete = DispatchSemaphore(value: 0)
+        Task.detached { [injection] in
+            await injection.disable()
+            teardownComplete.signal()
+        }
+        _ = teardownComplete.wait(timeout: .now() + Self.teardownTimeout)
     }
+
+    private static let teardownTimeout: DispatchTimeInterval = .seconds(3)
 
     /// The app-level injection job: every 4s, refresh booted devices, keep the injected set in sync, and
     /// feed the selected device's screen aspect back into the preview bezel + the injected frame size.
@@ -154,8 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Removes every trace of FauxCam: injection on all sims, the login item, preferences, app-support
     /// files + sockets, then moves the app bundle to the Trash and quits.
     func uninstall() {
-        Task {
-            await injection.disable()
+        Task { [injection, simulators] in
+            let booted = (try? await simulators.bootedDevices()) ?? []
+            await injection.reset(devices: booted.map(\.udid))
             try? await SMAppService.mainApp.unregister()
             if let domain = Bundle.main.bundleIdentifier {
                 UserDefaults.standard.removePersistentDomain(forName: domain)
@@ -163,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
                 try? FileManager.default.removeItem(at: support.appendingPathComponent("com.fauxcam"))
             }
-            try? FileManager.default.removeItem(atPath: Self.socketDirectory)
+            try? FileManager.default.removeItem(atPath: FauxSocketPaths.directory)
             NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
                 DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
             }

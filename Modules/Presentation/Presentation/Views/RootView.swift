@@ -36,6 +36,9 @@ public struct RootView: View {
             }
         }
         .onAppear { camera.refresh() }
+        .onChange(of: settings.hasOnboarded) { _, onboarded in
+            if onboarded { session.onboardingDidComplete() }
+        }
         .task(id: settings.hasOnboarded) {
             guard settings.hasOnboarded else { return }
             await FauxCamTour.run()

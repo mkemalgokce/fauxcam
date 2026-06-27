@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import ServiceManagement
+import Kernel
 
 /// Persistent settings: launch-at-login (via `SMAppService`) plus `hasOnboarded`/`autoFps` backed by
 /// `UserDefaults`. @Observable, @MainActor — pure UI/preferences state, no business logic.
@@ -21,7 +22,7 @@ public final class SettingsModel {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        autoFps = (defaults.object(forKey: Keys.fps) as? Int) ?? 30
+        autoFps = (defaults.object(forKey: Keys.fps) as? Int) ?? OutputResolution.defaultFramesPerSecond
         hasOnboarded = defaults.bool(forKey: Keys.onboarded)
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }

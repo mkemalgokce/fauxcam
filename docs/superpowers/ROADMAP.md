@@ -33,6 +33,12 @@ A phase is DONE only when all six gates pass. No phase starts before the prior o
 **Core phases (0–8) DONE — FauxCam is a complete, working, reviewed product** covering AVFoundation data-output, preview-layer, photo-capture, and metadata-scanner apps, with a polished menu bar app (installed-app picker, live self-view, camera-permission flow). Remaining optional extensions (not implemented): `AVCaptureMovieFileOutput` (recording), `UIImagePickerController` (high-level system camera UI), and the original "Fig layer" low-level capture hooks.
 | 6 | Fig layer | `FigCaptureSession` hooks for low-level capture clients (RN/Flutter/WebRTC). | ⬜ TODO |
 
+## Clean-architecture rewrite (complete — at parity)
+
+Phases 0–8 above shipped the original product (now preserved under `Legacy/`, unbuilt, as the behavior oracle). The live build is a feature-modular clean-arch rewrite under `Modules/` + `Apps/` (`Kernel`/`Platform`/`Capture`/`Streaming`/`Simulators`/`Injection`/`Framing`/`Diagnostics`/`Presentation`/`CLICore`, with composition roots `faux` and `FauxCamApp`). It builds green, the `faux` CLI (`doctor`/`list`/`apps`/`serve`/`run`) is implemented — `faux apps [--device <udid>]` surfaces the installed-app picker (`SimctlAppCatalog` behind the `AppCatalog` port) so users can find a bundle-id for `faux run` — and the menu-bar app is at full feature + safety parity with Legacy — every Critical and Important gap is closed and locked with unit tests.
+
+→ **Status & history: [`REWRITE-REMAINING-WORK.md`](REWRITE-REMAINING-WORK.md)** — the original 60-gap analysis, now fully resolved (including the gated booted-sim loader integration suite + a `PresentationTests` target).
+
 ## Control notes
 
 - De-risk the hardest unknown of each phase with an empirical multi-agent workflow BEFORE planning (as in Phase 0), so plans are placeholder-free and grounded on this machine (Xcode 27 / iPhoneSimulator27 / Apple Silicon, booted iPhone 17 Pro iOS 26.5).

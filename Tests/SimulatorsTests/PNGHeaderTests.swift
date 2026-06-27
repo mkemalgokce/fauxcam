@@ -18,4 +18,11 @@ struct PNGHeaderTests {
 
     @Test func nilForTooShort() { #expect(PNGHeader.aspect(of: Data([1, 2, 3])) == nil) }
     @Test func nilForZeroHeight() { #expect(PNGHeader.aspect(of: header(width: 100, height: 0)) == nil) }
+
+    @Test func nilForNonPNGSignature() {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        bytes[19] = 100
+        bytes[23] = 200
+        #expect(PNGHeader.aspect(of: Data(bytes)) == nil)
+    }
 }

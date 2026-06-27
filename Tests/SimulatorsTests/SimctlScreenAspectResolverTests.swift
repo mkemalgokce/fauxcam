@@ -26,4 +26,9 @@ struct SimctlScreenAspectResolverTests {
         let resolver = SimctlScreenAspectResolver(runner: FakeProcessRunner.returning(Data(), exit: 1))
         #expect(await resolver.screenAspect(forDeviceWithUDID: "ABC") == nil)
     }
+
+    @Test func nilForEmptyUDID() async {
+        let resolver = SimctlScreenAspectResolver(runner: FakeProcessRunner.returning(Data(), exit: 0))
+        #expect(await resolver.screenAspect(forDeviceWithUDID: "") == nil)
+    }
 }

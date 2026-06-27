@@ -10,8 +10,10 @@ public struct SimctlSimulatorRepository: SimulatorRepository {
 
     public func bootedDevices() async throws -> [SimDevice] {
         let result = try await runner.run(xcrun, arguments: ["simctl", "list", "devices", "booted", "-j"])
-        guard result.isSuccess else { return [] }
-        let dto = try JSONDecoder().decode(SimctlDeviceListDTO.self, from: result.standardOutput)
+        guard result.isSuccess else { throw SimctlQueryError.commandFailed(exitCode: result.exitCode) }
+        guard let dto = try? JSONDecoder().decode(SimctlDeviceListDTO.self, from: result.standardOutput) else {
+            throw SimctlQueryError.malformedOutput
+        }
         return SimDeviceMapper.devices(from: dto)
     }
 }

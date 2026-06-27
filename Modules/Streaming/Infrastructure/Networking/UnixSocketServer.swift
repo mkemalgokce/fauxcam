@@ -17,17 +17,30 @@ public final class UnixSocketServer: FrameServing, Sendable {
         self.codec = codec
     }
 
+    public func start() throws {
+        let alreadyBound = listenFD.withLock { $0 >= 0 }
+        guard !alreadyBound else { return }
+        let fd = try bindAndListen()
+        listenFD.withLock { $0 = fd }
+    }
+
     public func clients() -> AsyncStream<any FrameTransporting> {
         AsyncStream { continuation in
             let fd: Int32
-            do { fd = try bindAndListen() } catch { continuation.finish(); return }
-            listenFD.withLock { $0 = fd }
+            let existing = listenFD.withLock { $0 }
+            if existing >= 0 {
+                fd = existing
+            } else {
+                do { fd = try bindAndListen() } catch { continuation.finish(); return }
+                listenFD.withLock { $0 = fd }
+            }
             continuation.onTermination = { [weak self] _ in self?.stop() }
             let codec = self.codec
             Thread.detachNewThread {
                 while true {
                     let client = accept(fd, nil, nil)
                     if client < 0 { break }
+                    SocketIO.suppressSignalPipe(client)
                     continuation.yield(UnixSocketTransport(fileDescriptor: client, codec: codec))
                 }
                 continuation.finish()
@@ -44,12 +57,20 @@ public final class UnixSocketServer: FrameServing, Sendable {
     }
 
     private func bindAndListen() throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw SocketError.socketFailed }
-        unlink(path)
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+        let requiredLength = path.utf8.count + 1
+        guard requiredLength <= capacity else {
+            throw SocketError.pathTooLong(length: requiredLength, limit: capacity)
+        }
+        try FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw SocketError.socketFailed }
+        unlink(path)
         _ = withUnsafeMutablePointer(to: &addr.sun_path) { raw in
             raw.withMemoryRebound(to: CChar.self, capacity: capacity) { dst in
                 path.withCString { strncpy(dst, $0, capacity - 1) }

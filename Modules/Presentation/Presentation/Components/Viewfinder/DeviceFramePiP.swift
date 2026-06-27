@@ -1,5 +1,6 @@
 import SwiftUI
 import TipKit
+import Kernel
 import Simulators
 
 /// A small phone bezel showing how the frame maps onto the selected device, with two controls:
@@ -17,7 +18,7 @@ struct DeviceFramePiP<Content: View>: View {
     private let maxWidth: CGFloat = 100
 
     var body: some View {
-        let safeAspect = aspect.isFinite && aspect > 0 ? aspect : 9.0 / 19.5
+        let safeAspect = aspect.isFinite && aspect > 0 ? aspect : OutputResolution.defaultPortraitAspect
         let width = safeAspect >= 1 ? maxWidth : maxHeight * safeAspect
         let height = safeAspect >= 1 ? maxWidth / safeAspect : maxHeight
         content

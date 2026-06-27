@@ -22,6 +22,12 @@ public final class PreviewModel {
     /// on a ≥0.1 delta. Starts at 0.
     public private(set) var fps: Double = 0
 
+    private static let previewFramesPerSecond = 24
+    private static let millisecondsPerSecond = 1000
+    private static let fpsSmoothingFactor = 0.85
+    private static let fpsPublishCadenceTicks = 6
+    private static let fpsPublishThreshold = 0.1
+
     private let source: any FrameProducing
     private let cropStore: CropStore
     private var outputAspect: Double
@@ -36,7 +42,7 @@ public final class PreviewModel {
     public init(source: any FrameProducing, cropStore: CropStore, outputAspect: Double) {
         self.source = source
         self.cropStore = cropStore
-        self.outputAspect = outputAspect > 0 ? outputAspect : 9.0 / 19.5
+        self.outputAspect = outputAspect > 0 ? outputAspect : OutputResolution.defaultPortraitAspect
     }
 
     /// Stores the crop/zoom/rotation into the shared `CropStore`; the source reads it live, so crop
@@ -47,7 +53,7 @@ public final class PreviewModel {
     /// Sets the composed output aspect (= the selected device's screen aspect). Does NOT rebuild the
     /// source; both demands recompute at this aspect on the next tick.
     public func setOutputAspect(_ aspect: Double) {
-        outputAspect = aspect > 0 ? aspect : 9.0 / 19.5
+        outputAspect = aspect > 0 ? aspect : OutputResolution.defaultPortraitAspect
     }
 
     /// Clears `sourceImage`/`deviceImage` to nil; the next ticks re-prime. Used e.g. after camera
@@ -74,7 +80,7 @@ public final class PreviewModel {
     private func run() async {
         while !Task.isCancelled {
             await tick()
-            try? await Task.sleep(for: .milliseconds(1000 / 24))
+            try? await Task.sleep(for: .milliseconds(Self.millisecondsPerSecond / Self.previewFramesPerSecond))
         }
     }
 
@@ -108,20 +114,20 @@ public final class PreviewModel {
             let delta = now - lastFrameTime
             if delta > 0 {
                 let instant = 1.0 / delta
-                emaFps = emaFps == 0 ? instant : emaFps * 0.85 + instant * 0.15
+                emaFps = emaFps == 0 ? instant : emaFps * Self.fpsSmoothingFactor + instant * (1 - Self.fpsSmoothingFactor)
             }
         }
         lastFrameTime = now
         fpsTicksSincePublish += 1
-        if fpsTicksSincePublish >= 6 {
+        if fpsTicksSincePublish >= Self.fpsPublishCadenceTicks {
             fpsTicksSincePublish = 0
-            let rounded = (emaFps * 10).rounded() / 10
-            if abs(rounded - fps) >= 0.1 { fps = rounded }
+            let rounded = (emaFps / Self.fpsPublishThreshold).rounded() * Self.fpsPublishThreshold
+            if abs(rounded - fps) >= Self.fpsPublishThreshold { fps = rounded }
         }
     }
 
     private nonisolated static func demand(forAspect aspect: Double, longSide: Double) -> Demand {
-        let safeAspect = aspect > 0 ? aspect : 16.0 / 9.0
+        let safeAspect = aspect > 0 ? aspect : OutputResolution.defaultPortraitAspect
         let width: Int
         let height: Int
         if safeAspect >= 1 {

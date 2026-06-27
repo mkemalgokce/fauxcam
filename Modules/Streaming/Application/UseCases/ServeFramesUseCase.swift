@@ -14,11 +14,14 @@ public struct ServeFramesUseCase: Sendable {
         self.pool = pool
     }
 
+    /// Drains demands, producing and sending one frame each, then returns its buffer to the pool. The
+    /// recycle happens only AFTER `send` returns, because `send` copies the payload out before returning;
+    /// recycling any earlier could hand the buffer to the next producer mid-write.
     public func run() async {
         for await demand in transport.demands {
             guard let frame = try? await source.frame(for: demand) else { continue }
             try? await transport.send(frame)
-            await pool.recycle(frame.buffer)   // safe: send copied the payload out before returning
+            await pool.recycle(frame.buffer)
         }
     }
 }

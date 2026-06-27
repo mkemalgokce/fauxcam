@@ -13,7 +13,7 @@ bug reports, fixes, features, and docs — are welcome.
 - **`hotfix/<name>`** — urgent fixes off `main`, merged back to `main` and `develop`.
 
 The codebase is **feature-modular clean architecture** (`Modules/<Feature>/<Layer>/<Category>/`); see
-`docs/ARCHITECTURE.md`. The pre-rewrite code is kept under `Legacy/` for reference during migration.
+`docs/ARCHITECTURE.md` (a design extraction of the original system) and `README.md` for the live layout.
 
 ## Requirements
 
@@ -23,13 +23,16 @@ The codebase is **feature-modular clean architecture** (`Modules/<Feature>/<Laye
 
 ## Project layout
 
-- `Sources/FauxDomain` — pure value types (frames, crop region, demands).
-- `Sources/FauxAdapters` — frame sources, scaler, sockets, injection.
-- `Sources/FauxApplication` — CLI/serving glue.
-- `Sources/FauxCamApp` — the SwiftUI menu bar app.
+- `Modules/<Feature>/<Layer>/` — feature modules, each foldered by clean-arch layer
+  (`Domain` / `Data` / `Application` / `Infrastructure` / `Presentation`). Features:
+  `Kernel` + `Platform` (shared), `Capture`, `Streaming`, `Simulators`, `Injection`,
+  `Framing`, `Diagnostics`, `Presentation`, `CLICore`.
+- `Apps/MenuBarApp` — the SwiftUI menu bar app (`FauxCamApp`) composition root.
+- `Apps/CLI` — the `faux` CLI composition root.
 - `Guest/` — the injected dylib (Objective-C/C) that swizzles AVFoundation.
+- `Shared/faux_wire.h` — the single source of truth for the host↔guest wire protocol.
 - `Scripts/` — build & signing helpers.
-- `Tests/` — unit/integration tests.
+- `Tests/` — unit/integration tests (mirror the modules).
 
 ## Build & run
 

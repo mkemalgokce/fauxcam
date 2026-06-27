@@ -12,7 +12,7 @@ import Framing
 /// sandbox, so the camera view previews against the same composed test frame).
 @MainActor
 enum PreviewSupport {
-    static func previewModel(outputAspect: Double = 9.0 / 19.5) -> PreviewModel {
+    static func previewModel(outputAspect: Double = OutputResolution.defaultPortraitAspect) -> PreviewModel {
         let store = CropStore()
         let source = FrameSourceFactory(pool: RecyclingBufferPool()).makeSource(.testImage, crop: store.read)
         let model = PreviewModel(source: source, cropStore: store, outputAspect: outputAspect)
@@ -29,7 +29,7 @@ enum PreviewSupport {
                                              aspects: StubAspects(), dylibPath: "")
         return SessionModel(factory: factory, switchable: switchable, cropStore: store,
                             simulators: StubSimulators(), aspects: StubAspects(), injection: injection,
-                            pool: pool, webcam: WebcamCaptureSession())
+                            pool: pool, webcam: WebcamCaptureSession(), settings: SettingsModel())
     }
 }
 
@@ -38,7 +38,7 @@ private struct StubServer: FrameServing {
     func stop() {}
 }
 private struct StubEnv: LaunchEnvInjecting {
-    func install(onDevices udids: [String], dylibPath: String, frameSize: FrameSize) async {}
+    func install(onDevices udids: [String], dylibPath: String, frameSize: FrameSize) async -> [String] { udids }
     func setFrameSize(_ frameSize: FrameSize, onDevices udids: [String]) async {}
     func uninstall(fromDevices udids: [String]) async {}
     func leftoverDevices(among udids: [String], dylibPath: String) async -> [String] { [] }

@@ -26,8 +26,15 @@ swift run faux doctor
 ## Use the CLI
 
 ```sh
+# Verify the guest dylib is loadable (defaults to the bundled/dist dylib; pass a path to audit another)
+swift run faux doctor [path-to-dylib]
+
 # List booted simulators
 swift run faux list
+
+# List a simulator's installed user apps (find the bundle-id for `faux run`)
+swift run faux apps
+swift run faux apps --device <udid>
 
 # Run an app in a booted simulator with a fake camera, in one command:
 swift run faux run com.example.MyApp --source video:/path/to/clip.mov
@@ -84,13 +91,29 @@ A dark instrument-panel menu bar app. Build the signed bundle with `./Scripts/si
 
 ## Architecture
 
-Layered, framework-independent (Clean Architecture):
+Feature-modular and framework-independent (Clean Architecture). Each module owns its own
+domain layer (entities + ports) and keeps frameworks at the edges; dependencies point
+inward toward `Kernel`.
 
-- **`FauxDomain`** — framework-free entities and ports (`Frame`, `Demand`, `SimDevice`, `FrameSource`, `FrameTransport`, `SimDeviceProviding`).
-- **`FauxApplication`** — use cases (`StreamCoordinator` pull loop, `DeviceResolver`).
-- **`FauxAdapters`** — concrete adapters (`UnixSocketTransport`, `ImageSource`/`VideoFileSource`/`WebcamSource`/`QRCodeSource`, `SimctlDeviceProvider`, `FauxRunSession`).
-- **`faux` / `FauxCamApp`** — composition roots (CLI and menubar).
-- **`Guest/`** — the injected Objective-C dylib: AVFoundation swizzles + the socket client. All Apple-fighting risk is isolated in `AVSwizzle`/`SessionSwizzle`; failures fall through to the original implementation so the host app never crashes.
+`Modules/`:
+
+- **`Kernel`** — framework-free entities and core ports (`Frame`, `Demand`, `CropRegion`, `CameraPosition`, `PixelFormat`, `OutputResolution`, `FrameProducing`, `FrameTransporting`, `BufferPooling`).
+- **`Platform`** — the subprocess port (`ProcessRunning`) and its Foundation adapter (`FoundationProcessRunner`).
+- **`Capture`** — frame sources and compositing: the `SourceDescriptor` spec, `FrameSourceFactory`, `ComposedFrameSource`/`SwitchableFrameSource`, the still/video/webcam/QR content, and the CoreImage compositor.
+- **`Streaming`** — the serve loop and I/O: `ServeFramesUseCase`/`RunFrameServerUseCase`, the wire codec (`WireCodec`/`WireFormat`), `UnixSocketServer`/`UnixSocketTransport`, and `RecyclingBufferPool`.
+- **`Simulators`** — `simctl`-backed queries: `SimctlSimulatorRepository`, `SimctlAppCatalog`, `SimctlScreenAspectResolver`, and `DeviceResolver`.
+- **`Injection`** — the injection vectors and lifecycle: `RunSingleAppUseCase`, `AutoInjectionService`, `SimEnvInjector` (launchd DYLD), and `LldbHookInstaller` (Xcode-run stop hook).
+- **`Framing`** — live framing state: `CropStore` and `FramingMath`.
+- **`Diagnostics`** — the dylib loadability audit: `DoctorService`, `MachOToolInspector`, `DylibAudit`.
+- **`Presentation`** — the SwiftUI view models and views (`SessionModel`, `PreviewModel`, `SettingsModel`, `RootView`, `ViewfinderCard`, `DeviceFramePiP`, …).
+- **`CLICore`** — the `faux` verb dispatcher (`CommandRunner`) and argument parsers, speaking only to ports.
+
+Composition roots in `Apps/` own every concrete and wire the modules together:
+
+- **`Apps/CLI`** (`faux`) — parses the verb, constructs the adapters, dispatches a `CommandRunner`.
+- **`Apps/MenuBarApp`** (`FauxCamApp`) — the macOS menu-bar app (`@main FauxCamApp`).
+
+`Guest/` is the injected Objective-C dylib (`libFaux.dylib`): AVFoundation swizzles + the socket client, built separately for the iphonesimulator platform by `Scripts/build-dylib.sh`. All Apple-fighting risk is isolated in the swizzles (`AVSwizzle`/`SessionSwizzle`); failures fall through to the original implementation so the host app never crashes.
 
 The wire protocol has a single source of truth in `Shared/faux_wire.h`, compiled by both host and guest.
 

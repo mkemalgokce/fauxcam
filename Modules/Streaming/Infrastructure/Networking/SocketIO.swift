@@ -2,6 +2,13 @@ import Darwin
 
 /// Signal-safe blocking read/write over a socket fd. Low-level mechanism only — no frame semantics.
 enum SocketIO {
+    /// Stop a write to a peer-closed socket from raising SIGPIPE (which would terminate the host on a
+    /// routine guest disconnect); `write` then returns -1/EPIPE, surfaced as a normal failure.
+    static func suppressSignalPipe(_ fd: Int32) {
+        var enabled: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     /// Read exactly `count` bytes. Returns nil on EOF or error.
     static func readFully(_ fd: Int32, count: Int) -> [UInt8]? {
         guard count >= 0 else { return nil }
@@ -35,4 +42,7 @@ enum SocketIO {
     }
 }
 
-enum SocketError: Error, Equatable { case writeFailed, bindFailed, listenFailed, socketFailed }
+enum SocketError: Error, Equatable {
+    case writeFailed, bindFailed, listenFailed, socketFailed
+    case pathTooLong(length: Int, limit: Int)
+}

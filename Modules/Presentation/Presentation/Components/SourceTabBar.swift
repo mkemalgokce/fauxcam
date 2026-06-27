@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// The Media / Camera / QR selector — a Liquid Glass container of segment buttons (legacy design).
+/// The Media / Camera / QR selector — a Liquid Glass container of segment buttons.
 ///
-/// Legacy `controller.sourceKind` has four cases (`image`/`webcam`/`video`/`qr`); the panel collapses
+/// `SessionModel.SourceKind` has four cases (`image`/`webcam`/`video`/`qr`); the panel collapses
 /// them into three visible tabs (Media spans `image`+`video`). That Media/Camera/QR collapse is a
-/// view-level concern, modelled here by `SourceTab` mapped onto the contract's 4-case `SourceKind`.
+/// view-level concern, modelled here by `SourceTab` mapped onto the 4-case `SourceKind`.
 struct SourceTabBar: View {
     @Binding var sourceKind: SessionModel.SourceKind
     let videoPath: String

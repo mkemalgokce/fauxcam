@@ -50,7 +50,7 @@ cat > "$STAGE/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>NSCameraUsageDescription</key><string>FauxCam previews your camera and streams it as a fake camera into the iOS Simulator.</string>
 </dict>
@@ -76,6 +76,15 @@ codesign -d --entitlements - "$STAGE" 2>&1 | grep -q "device.camera" || { echo "
 /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$STAGE/Contents/Info.plist" >/dev/null
 echo "==> Signed bundle at $STAGE (hardened runtime + camera entitlement)"
 
+echo "==> Building faux CLI ($BUILD_CONFIG)"
+swift build -c "$BUILD_CONFIG" --product faux --package-path "$ROOT"
+FAUX_BINARY="$(swift build -c "$BUILD_CONFIG" --product faux --package-path "$ROOT" --show-bin-path)/faux"
+FAUX_CLI="$ROOT/dist/faux"
+cp "$FAUX_BINARY" "$FAUX_CLI"
+codesign --force --options runtime --entitlements "$ROOT/dist/FauxCam.entitlements" --sign "$IDENTITY" "$FAUX_CLI"
+codesign --verify --strict "$FAUX_CLI"
+echo "==> Signed faux CLI at $FAUX_CLI (hardened runtime + camera entitlement)"
+
 if [[ "$IDENTITY" == "-" ]]; then
   cat <<'NOTE'
 
@@ -91,26 +100,31 @@ To ship to production:
 NOTE
 else
   echo "==> Distribution build with Developer ID"
-  if [[ -n "${NOTARIZE_PROFILE:-}" ]]; then
-    echo "==> Submitting for notarization (this contacts Apple and waits)"
-    ZIP="$ROOT/dist/FauxCam.zip"
-    ditto -c -k --keepParent "$STAGE" "$ZIP"
-    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARIZE_PROFILE" --wait
-    xcrun stapler staple "$STAGE"
-    xcrun stapler validate "$STAGE"
-    rm -f "$ZIP"
-    echo "==> Notarized + stapled"
-  else
-    echo "NOTE: Developer ID signed but NOT notarized. Set NOTARIZE_PROFILE=<profile> to notarize."
-  fi
 
-  echo "==> Building DMG"
+  echo "==> Building DMG (app + faux CLI)"
   DMG="$ROOT/dist/FauxCam.dmg"
   DMG_STAGE="$ROOT/dist/.dmg-stage"
   rm -f "$DMG"; rm -rf "$DMG_STAGE"; mkdir -p "$DMG_STAGE"
   cp -R "$STAGE" "$DMG_STAGE/$APP_NAME"
+  cp "$FAUX_CLI" "$DMG_STAGE/faux"
   ln -s /Applications "$DMG_STAGE/Applications"
   hdiutil create -volname "FauxCam" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG" >/dev/null
   rm -rf "$DMG_STAGE"
   echo "==> DMG at $DMG"
+
+  if [[ -n "${NOTARIZE_PROFILE:-}" ]]; then
+    # Notarize the DMG itself: notarytool inspects every nested Mach-O (the app,
+    # its bundled libFaux.dylib, and the standalone faux CLI), so one submission
+    # covers all distributed code. Staple both the DMG and the app so first launch
+    # works offline.
+    echo "==> Submitting the DMG for notarization (this contacts Apple and waits)"
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARIZE_PROFILE" --wait
+    xcrun stapler staple "$STAGE"
+    xcrun stapler staple "$DMG"
+    xcrun stapler validate "$STAGE"
+    xcrun stapler validate "$DMG"
+    echo "==> Notarized + stapled (app, faux CLI, DMG)"
+  else
+    echo "NOTE: Developer ID signed but NOT notarized. Set NOTARIZE_PROFILE=<profile> to notarize the DMG."
+  fi
 fi

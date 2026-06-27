@@ -1,5 +1,13 @@
 # FauxCam — Architecture Reference (Extraction for Clean-Architecture Rewrite)
 
+> **Note — this documents the *original* (pre-rewrite) system as a design oracle.** It describes the
+> `Sources/FauxDomain` / `FauxApplication` / `FauxAdapters` layout, which now lives under `Legacy/` (unbuilt)
+> and is being removed. The *live* implementation is the feature-modular clean-arch layout under
+> `Modules/` + `Apps/` (composition roots `faux` and `FauxCamApp`, guest dylib in `Guest/`). For the current
+> architecture see [`../README.md`](../README.md); for the rewrite's parity status see
+> [`superpowers/REWRITE-REMAINING-WORK.md`](superpowers/REWRITE-REMAINING-WORK.md). Read this file for the
+> behavior contract and rationale the rewrite preserves, not for current module/symbol names.
+
 This document extracts the system as it actually exists in `/Users/mkemalgokce/Developer/Personal/ios-simulator-camera`. Everything below is grounded in the real source. Where the prior subsystem scan disagrees with the code, the code wins (noted inline). The Swift Package is named `FauxCore` (`Package.swift`); products are two executables: `faux` (CLI) and `FauxCamApp` (the menu-bar app). The injected guest is built separately as a C/ObjC dylib (`Guest/`, built by `Scripts/build-dylib.sh`), not by SwiftPM.
 
 ---
@@ -182,7 +190,7 @@ These buckets are a *starting* proposal for where today's pieces land under Enti
 `StreamCoordinator` (serve-frames), an "enable/maintain auto-injection" interactor (today split across `AutoModeController` + `AutoInjectionServer`'s server logic), a "run single app" interactor (`FauxRunSession`'s coordination, minus the simctl calls), `DeviceResolver`, `DoctorService`, and a "produce preview frames" interactor (the source-pull half of `PreviewStreamer`). Ports they speak to: `FrameSource`, `FrameTransport`, `SimDeviceProviding`, `DeviceScreenAspectProviding`, `InstalledAppProviding`, `DylibInspecting`, plus *new* ports to extract: `InjectionVector` (DYLD/lldb), `FrameSizeAdvertiser`, `ProcessRunner`.
 
 **Interface-adapters (translate between use-cases and the outside):**
-`WireProtocol`/codecs, `FrameSourceFactory`, `SwitchableFrameSource`, `PixelBufferScaler`, the simctl decoders, `MachOToolInspector`, `SimEnvInjector`, `LldbInjectionInstaller`, the CLI arg parsers (`RunArguments`/`ServeArguments`/`OptionScanner`), and the SwiftUI ViewModels (`SessionController`, the publish half of `PreviewStreamer`, `AutoModeController` as the UI-facing facade, `AppSettings`).
+`WireProtocol`/codecs, `FrameSourceFactory`, `SwitchableFrameSource`, `PixelBufferScaler`, the simctl decoders, `MachOToolInspector`, `SimEnvInjector`, `LldbInjectionInstaller`, the CLI arg parsers (`RunArguments`/`ServeArguments`/`AppsArguments`/`OptionScanner`), the installed-app picker (`SimctlAppCatalog` behind `AppCatalog`, surfaced as `faux apps [--device <udid>]`), and the SwiftUI ViewModels (`SessionController`, the publish half of `PreviewStreamer`, `AutoModeController` as the UI-facing facade, `AppSettings`).
 
 **Frameworks & drivers (volatile edge):**
 `UnixSocketTransport` + raw Darwin sockets; CoreImage/CoreVideo/AVFoundation inside the sources; `xcrun simctl`/`lldb`/`lipo`/`otool`/`codesign` processes; SwiftUI/AppKit views (`RootView`, `ViewfinderCard`, `DeviceFramePiP`, `SettingsView`, `ZoomScrollCatcher`, `CameraSelfView`); TipKit; SMAppService; the build scripts. **The entire guest dylib (`Guest/`) is a frameworks-&-drivers component of its own** — it is the device-driver for a fake camera — coupled to the rest of the system *only* through the wire contract (`Shared/faux_wire.h`). Treat it as a separately-versioned external boundary.

@@ -22,6 +22,7 @@ public actor UnixSocketTransport: FrameTransporting {
     public init(fileDescriptor: Int32, codec: WireCodec = WireCodec()) {
         fd = fileDescriptor
         self.codec = codec
+        SocketIO.suppressSignalPipe(fd)
         ioQueue = DispatchSerialQueue(label: "com.fauxcam.streaming.socket-io")
         (demands, continuation) = AsyncStream.makeStream()
         let fd = self.fd, codec = self.codec, continuation = self.continuation

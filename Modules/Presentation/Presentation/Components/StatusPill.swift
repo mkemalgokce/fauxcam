@@ -20,8 +20,7 @@ struct StatusPill: View {
                     .background(.green.opacity(0.2), in: .capsule).foregroundStyle(.green)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .glassPill()
         .popoverTip(InjectionTip(), arrowEdge: .top)
         .padding(.horizontal, 16)
         .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: isInjecting)
