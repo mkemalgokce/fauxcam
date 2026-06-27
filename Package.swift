@@ -1,4 +1,4 @@
-// swift-tools-version: 6.4
+// swift-tools-version: 6.3
 import PackageDescription
 
 // Feature-modular clean architecture. Each feature is one SPM target whose source tree is foldered by

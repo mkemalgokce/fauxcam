@@ -12,7 +12,7 @@ concurrency:
 jobs:
   test:
     name: Build & Test
-    # Pinned to the macOS 26 image: Package.swift needs Swift tools 6.4 and the
+    # Pinned to the macOS 26 image: Package.swift needs Swift tools 6.3 (Xcode 26) and the
     # menu-bar app/CLI target .macOS(.v26); an older default Xcode fails to resolve the manifest.
     runs-on: macos-26
     steps:
