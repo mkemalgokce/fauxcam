@@ -1,0 +1,168 @@
+name: Release
+
+# Distribution pipeline for FauxCam.
+#
+# Triggers on a pushed v* tag (e.g. v1.0.0) or a manual workflow_dispatch.
+# It builds + signs via Scripts/sign-app.sh and publishes a GitHub Release.
+#
+# Two paths, chosen automatically by whether the signing secrets are present:
+#
+#   1. Notarized path (recommended for public releases). Requires ALL of these
+#      repository secrets to be set:
+#        MACOS_CERTIFICATE_P12_BASE64  base64 of a "Developer ID Application"
+#                                      certificate + private key exported as .p12
+#                                      (run: base64 -i cert.p12 | pbcopy)
+#        MACOS_CERTIFICATE_PASSWORD    password used when exporting that .p12
+#        MACOS_SIGNING_IDENTITY        e.g. "Developer ID Application: Name (TEAMID)"
+#        APPLE_ID                      Apple ID email for notarytool
+#        APPLE_TEAM_ID                 10-character Apple Developer Team ID
+#        APPLE_APP_PASSWORD            app-specific password from appleid.apple.com
+#      Result: a Developer-ID-signed, notarized and stapled dist/FauxCam.dmg.
+#
+#   2. Ad-hoc path (fallback when the secrets above are NOT all set). Produces an
+#      UNSIGNED zip. Gatekeeper blocks it on other Macs — users must right-click >
+#      Open, or you must add the secrets above to get the notarized DMG.
+#
+# No identity or password is ever hardcoded; everything comes from secrets.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign & publish
+    # Package.swift needs Swift tools 6.3 (Xcode 26) and targets .macOS(.v26).
+    runs-on: macos-26
+    env:
+      # secrets cannot be referenced directly in `if:`, so collapse the presence
+      # check into a single 'true'/'false' string the steps below can gate on.
+      HAS_SIGNING_SECRETS: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.MACOS_SIGNING_IDENTITY != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+      NOTARY_PROFILE: fauxcam-notary
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app || true
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # --- Notarized path ---------------------------------------------------
+
+      - name: Import Developer ID certificate and notary credentials
+        if: env.HAS_SIGNING_SECRETS == 'true'
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer_id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/fauxcam-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          echo -n "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          # Make the temporary keychain the one codesign and notarytool consult.
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          # Stored under NOTARY_PROFILE so sign-app.sh's NOTARIZE_PROFILE finds it.
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --keychain "$KEYCHAIN_PATH"
+
+          rm -f "$CERTIFICATE_PATH"
+
+      - name: Build, sign, notarize and package DMG
+        if: env.HAS_SIGNING_SECRETS == 'true'
+        env:
+          NOTARIZE_PROFILE: ${{ env.NOTARY_PROFILE }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: bash Scripts/sign-app.sh "$MACOS_SIGNING_IDENTITY"
+
+      - name: Publish release (notarized DMG)
+        if: env.HAS_SIGNING_SECRETS == 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FauxCam ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/FauxCam.dmg
+            dist/faux
+          body: |
+            ## FauxCam ${{ github.ref_name }}
+
+            Developer-ID-signed, notarized and stapled. Download `FauxCam.dmg`,
+            open it, and drag **FauxCam.app** to Applications. The standalone
+            `faux` CLI is attached separately and inside the DMG.
+
+            Requires macOS 26.
+
+            See the README for usage, CONTRIBUTING.md to contribute, SECURITY.md
+            to report issues, and LICENSE (MIT) for terms.
+
+      # --- Ad-hoc fallback path --------------------------------------------
+
+      - name: Build (ad-hoc) and package unsigned zip
+        if: env.HAS_SIGNING_SECRETS != 'true'
+        run: |
+          set -euo pipefail
+          bash Scripts/sign-app.sh -
+          STAGE="$RUNNER_TEMP/FauxCam"
+          rm -rf "$STAGE"; mkdir -p "$STAGE"
+          cp -R dist/FauxCam.app "$STAGE/FauxCam.app"
+          cp dist/faux "$STAGE/faux"
+          ditto -c -k --sequesterRsrc --keepParent "$STAGE" dist/FauxCam-unsigned.zip
+
+      - name: Publish release (unsigned zip)
+        if: env.HAS_SIGNING_SECRETS != 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FauxCam ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/FauxCam-unsigned.zip
+            dist/faux
+          body: |
+            ## FauxCam ${{ github.ref_name }} (unsigned build)
+
+            > **Warning:** this build is **ad-hoc signed only** — it is NOT signed
+            > with a Developer ID and NOT notarized. macOS Gatekeeper will block it
+            > on other Macs. To run it: unzip `FauxCam-unsigned.zip`, then
+            > right-click **FauxCam.app** > **Open** and confirm once.
+            >
+            > Maintainers: add the `MACOS_CERTIFICATE_P12_BASE64`,
+            > `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`,
+            > `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` repository secrets to ship a
+            > notarized DMG instead (see .github/workflows/release.yml).
+
+            The archive contains **FauxCam.app** and the `faux` CLI (also attached
+            separately). Requires macOS 26.
+
+            See the README for usage, CONTRIBUTING.md to contribute, SECURITY.md
+            to report issues, and LICENSE (MIT) for terms.

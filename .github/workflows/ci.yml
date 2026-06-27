@@ -16,7 +16,7 @@ jobs:
     # menu-bar app/CLI target .macOS(.v26); an older default Xcode fails to resolve the manifest.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Select Xcode 26
         run: sudo xcode-select -s /Applications/Xcode_26.app || true

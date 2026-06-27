@@ -6,17 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-27
+
+First public release. FauxCam feeds a custom camera source into apps running in
+the iOS Simulator, where Apple provides no camera.
+
 ### Added
-- Menu bar app: in-app live preview with a device-bezel picture-in-picture.
-- Framing gestures over the preview — pinch/scroll to zoom, drag to pan, and
-  free trackpad rotation, pushed live to the preview and every simulator.
-- Device-bezel controls — rotate the device orientation and pick which
-  simulator's bezel to preview.
+- **Menu-bar app (`FauxCamApp`)** — a WYSIWYG viewfinder card showing the exact
+  frame each simulator receives, with a tabbed source picker (Media / Camera /
+  QR), a liquid-glass simulator picker, and a portrait ⇄ landscape orientation
+  toggle that rotates the source to fit the selected device.
+- **Framing gestures** over the viewfinder — drag to pan, scroll or pinch to
+  zoom, and two-finger twist to rotate (with magnetic snap to right angles),
+  pushed live to the preview and every injected simulator.
+- **Automatic injection** of every booted simulator, including apps launched
+  from Xcode, via the launchd `DYLD` vector and an Xcode-run stop hook.
+- **`faux` CLI** with `doctor`, `list`, `apps`, `serve`, and `run` verbs.
+- **Camera sources** — still image, looped video file, live Mac webcam /
+  Continuity Camera, and generated QR codes.
+- Configurable output resolution and frame rate via environment variables,
+  with advertised device format and delivered frames kept in sync.
+- Signing and distribution via `Scripts/sign-app.sh` — ad-hoc for local use, or
+  Developer ID signing with optional notarization and a stapled DMG.
 
 ### Changed
-- Unified the frame-sizing model so the main viewfinder, the bezel, and every
-  injected simulator share one output aspect (WYSIWYG).
+- Rewrote the codebase to a feature-modular Clean Architecture
+  (domain → application → adapters → delivery) at production parity, with each
+  module owning its entities and ports and frameworks kept at the edges.
+- Unified the frame-sizing model so the viewfinder and every injected simulator
+  share one output aspect (WYSIWYG).
 
-### Fixed
-- Crash when an app set `AVCaptureVideoPreviewLayer.session` on the simulator.
-- Camera black-screen across additional `AVCaptureDevice` discovery paths.
+[Unreleased]: https://github.com/mkemalgokce/fauxcam/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/mkemalgokce/fauxcam/releases/tag/v1.0.0
