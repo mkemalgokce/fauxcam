@@ -129,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)   // menu-bar agent: no Dock icon, can still present windows/panels
         FauxCamTour.configure()   // TipKit must be configured before any tip can present
         camera.refresh()
         Task { [injection, simulators] in

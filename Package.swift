@@ -44,7 +44,20 @@ let package = Package(
         // Composition roots.
         .executableTarget(name: "FauxCamApp",
                           dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Framing", "Diagnostics", "Presentation"],
-                          path: "Apps/MenuBarApp"),
+                          path: "Apps/MenuBarApp",
+                          exclude: ["Info.plist"],   // consumed by the linker below, not a Swift source/resource
+                          // Embed Info.plist into the Mach-O __TEXT,__info_plist section so the executable
+                          // carries a bundle identifier + LSUIElement even when run directly (swift run /
+                          // Xcode), not only inside the assembled .app. Without it macOS reports a "missing
+                          // main bundle identifier" and refuses to present the Settings window / NSOpenPanel.
+                          linkerSettings: [
+                              .unsafeFlags([
+                                  "-Xlinker", "-sectcreate",
+                                  "-Xlinker", "__TEXT",
+                                  "-Xlinker", "__info_plist",
+                                  "-Xlinker", "Apps/MenuBarApp/Info.plist",
+                              ])
+                          ]),
         .executableTarget(name: "FauxCLI",
                           dependencies: ["CLICore", "Kernel", "Platform", "Capture", "Streaming", "Simulators", "Injection", "Diagnostics", "Framing"],
                           path: "Apps/CLI"),
