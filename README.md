@@ -1,7 +1,14 @@
-# FauxCam
+<p align="center">
+  <img src="docs/assets/icon.png" alt="FauxCam app icon" width="160" height="160">
+</p>
 
-[![CI](https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<h1 align="center">FauxCam</h1>
+
+<p align="center">
+  <a href="https://github.com/mkemalgokce/fauxcam/releases"><img src="https://img.shields.io/github/v/release/mkemalgokce/fauxcam" alt="Latest release"></a>
+  <a href="https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml"><img src="https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
 Feed a custom camera source — a still image, a video file, your Mac's webcam/Continuity Camera, or a QR code — into apps running in the **iOS Simulator**, where Apple provides no camera.
 
@@ -20,36 +27,40 @@ The menu-bar app targets macOS 26 SwiftUI; the `faux` CLI and the core libraries
 
 ## Install
 
-### Download a release
+FauxCam ships as **two independent downloads** on the [Releases](https://github.com/mkemalgokce/fauxcam/releases) page: the menu-bar app and the `faux` CLI are versioned and released separately, so you can take either one on its own.
 
-Go to the [Releases](https://github.com/mkemalgokce/fauxcam/releases) page. Which asset you find there depends on whether the maintainer has configured Developer ID signing secrets:
+### FauxCam.app (menu-bar app)
 
-- **Notarized build (`FauxCam.dmg`):** open the DMG and drag **FauxCam.app** to `/Applications`. The DMG also contains the standalone `faux` CLI.
-- **Ad-hoc build (`FauxCam-unsigned.zip`):** unzip it, then right-click **FauxCam.app** and choose **Open** the first time so Gatekeeper lets it run. The standalone `faux` CLI is in the archive (and attached separately).
+Released from `v*` tags as a Developer-ID-signed, notarized **`FauxCam.dmg`**.
 
-> **Note on signing:** producing a notarized `FauxCam.dmg` requires the maintainer to add Developer ID signing secrets. Until those are in place, the release ships `FauxCam-unsigned.zip`, which is **ad-hoc signed** and so Gatekeeper blocks a normal double-click — hence the right-click → **Open** step above. See [Distribution & signing](#distribution--signing).
+1. Download `FauxCam.dmg` from the latest [`v*` release](https://github.com/mkemalgokce/fauxcam/releases).
+2. Open the DMG and drag **FauxCam.app** to `/Applications`.
+3. Launch it.
 
-### Build from source
+> **FauxCam is a menu-bar app.** It runs as a background agent (`LSUIElement`): its icon appears in the menu bar with **no Dock icon and no main window**. Click the menu-bar icon to open the viewfinder panel.
+
+Because the DMG is notarized and stapled, it opens with a normal double-click — no Gatekeeper workaround needed.
+
+### faux (CLI)
+
+Released separately from `cli-v*` tags. Download the `faux` binary from the latest [`cli-v*` release](https://github.com/mkemalgokce/fauxcam/releases) and install it on your `PATH`:
 
 ```sh
-git clone https://github.com/mkemalgokce/fauxcam.git
-cd fauxcam
+install -m 0755 faux /usr/local/bin/faux
 
-# Build both executables (the `faux` CLI and the FauxCamApp menu-bar app).
-swift build
+# First run only: clear the quarantine attribute macOS adds to downloads.
+xattr -d com.apple.quarantine /usr/local/bin/faux 2>/dev/null || true
 
-# Build the menu-bar app bundle (also builds the guest dylib and signs ad-hoc).
-./Scripts/sign-app.sh
-open dist/FauxCam.app
+faux list
 ```
 
-`Scripts/sign-app.sh` assembles `dist/FauxCam.app` with the guest dylib bundled into its resources and produces a signed `dist/faux` CLI. To build only the guest dylib, run `./Scripts/build-dylib.sh` (fat arm64+x86_64, iphonesimulator, ad-hoc signed).
+If macOS still reports the binary as quarantined, re-run the `xattr -d com.apple.quarantine` line above against `/usr/local/bin/faux`.
 
 ## Usage
 
 ### Menu-bar app
 
-Launch **FauxCamApp**. It runs as a menu-bar item (no Dock icon) and injects every booted simulator automatically — including apps you run from Xcode — so a target app sees the fake camera the moment it opens an `AVCaptureSession`.
+Launch **FauxCamApp** and click its menu-bar icon. It injects every booted simulator automatically — including apps you run from Xcode — so a target app sees the fake camera the moment it opens an `AVCaptureSession`.
 
 The panel is a **viewfinder card** that shows the exact frame each simulator receives (WYSIWYG):
 
@@ -94,18 +105,17 @@ usage: faux <command>
 Examples:
 
 ```sh
-swift run faux doctor                  # is the guest dylib loadable?
-swift run faux list                    # which simulators are booted?
-swift run faux apps                    # installed apps on the booted simulator
-swift run faux apps --device <udid>    # ...on a specific simulator
+faux doctor                  # is the guest dylib loadable?
+faux list                    # which simulators are booted?
+faux apps                    # installed apps on the booted simulator
+faux apps --device <udid>    # ...on a specific simulator
 
-swift run faux run com.example.MyApp --source video:/path/to/clip.mov
-swift run faux run com.example.MyApp --source webcam
-swift run faux run com.example.MyApp --source qr:https://example.com
-swift run faux run --device <udid> com.example.MyApp --source image
+faux run com.example.MyApp --source image:/path/to/photo.png
+faux run com.example.MyApp --source video:/path/to/clip.mov
+faux run com.example.MyApp --source webcam
+faux run com.example.MyApp --source qr:https://example.com
+faux run --device <udid> com.example.MyApp --source image
 ```
-
-(After building with `Scripts/sign-app.sh`, you can invoke the signed `dist/faux` directly instead of `swift run faux`.)
 
 ## How it works
 
@@ -113,23 +123,45 @@ FauxCam injects `libFaux.dylib` into the simulated process via `DYLD_INSERT_LIBR
 
 For the layered, framework-independent design (domain → application → adapters → delivery) and the module map, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Distribution & signing
-
-`./Scripts/sign-app.sh [identity]` builds and code-signs the menu-bar app as `dist/FauxCam.app` and the `faux` CLI as `dist/faux`:
-
-- **Ad-hoc** (default, `identity` = `-`): for local use only. Gatekeeper will block it on other Macs, so distributing this build requires the right-click → Open workaround.
-- **Developer ID**: pass a `"Developer ID Application: Your Name (TEAMID)"` identity to sign with the hardened runtime and build `dist/FauxCam.dmg`. When `NOTARIZE_PROFILE` is also set, the script additionally submits the DMG to Apple for notarization and staples the app and DMG so first launch works offline.
+## Build from source
 
 ```sh
-# Local, ad-hoc:
-./Scripts/sign-app.sh
+git clone https://github.com/mkemalgokce/fauxcam.git
+cd fauxcam
+swift build        # builds the faux CLI and the FauxCamApp menu-bar app
+swift test         # runs the test suite
+```
 
-# Distribution, notarized DMG:
+### Build the menu-bar app
+
+`Scripts/sign-app.sh [identity]` builds the app icon, the guest dylib, and the release `FauxCamApp`, assembles `dist/FauxCam.app`, and code-signs it:
+
+```sh
+./Scripts/sign-app.sh        # ad-hoc, local use only
+open dist/FauxCam.app
+```
+
+Pass a `"Developer ID Application: Your Name (TEAMID)"` identity to sign with the hardened runtime and build `dist/FauxCam.dmg`. With `NOTARIZE_PROFILE` also set, the script submits the DMG to Apple for notarization and staples the app and DMG so first launch works offline:
+
+```sh
 NOTARIZE_PROFILE=fauxcam-notary ./Scripts/sign-app.sh \
   "Developer ID Application: Your Name (TEAMID)"
 ```
 
 The script prints the exact `notarytool store-credentials` step for creating the notarization profile.
+
+### Build the CLI
+
+`Scripts/package-cli.sh` builds and signs the standalone `faux` CLI for distribution (the `cli-v*` release artifact). To build only the guest dylib for either path, run `./Scripts/build-dylib.sh` (fat arm64+x86_64, iphonesimulator, ad-hoc signed).
+
+## Distribution & signing
+
+Releases are produced by two workflows: `.github/workflows/release.yml` (the menu-bar app, on `v*` tags) and `.github/workflows/release-cli.yml` (the standalone `faux` CLI, on `cli-v*` tags).
+
+- A pushed **`v*`** tag builds, signs, notarizes, and publishes the menu-bar app as `FauxCam.dmg` via `release.yml`.
+- A pushed **`cli-v*`** tag builds, signs, and publishes the standalone `faux` CLI via `release-cli.yml`.
+
+Signing is driven entirely by repository secrets (`MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`) — no identity or password is ever hardcoded. There is no Developer ID Installer certificate, so FauxCam is distributed as a notarized DMG and a signed CLI binary rather than a `.pkg`.
 
 ## Tests
 

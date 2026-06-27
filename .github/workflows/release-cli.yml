@@ -1,13 +1,15 @@
-name: Release App
+name: Release CLI
 
-# Distribution pipeline for the FauxCam menu-bar app.
+# Distribution pipeline for the standalone `faux` command-line tool.
 #
-# Triggers on a pushed v* tag (e.g. v1.0.0) or a manual workflow_dispatch.
-# It builds + signs the app via Scripts/sign-app.sh and publishes a GitHub
-# Release that attaches ONLY dist/FauxCam.dmg.
+# Triggers on a pushed cli-v* tag (e.g. cli-v1.0.0) or a manual
+# workflow_dispatch. It builds + signs + notarizes via Scripts/package-cli.sh
+# and publishes a SEPARATE GitHub Release that attaches dist/faux and
+# dist/faux.zip.
 #
-# The standalone `faux` CLI ships from its own pipeline (release-cli.yml,
-# triggered by cli-v* tags). This workflow never touches the CLI.
+# The menu-bar app ships from its own pipeline (release.yml, triggered by v*
+# tags). This workflow never touches the app, never builds a DMG, and never
+# needs create-dmg.
 #
 # Two paths, chosen automatically by whether the signing secrets are present:
 #
@@ -21,29 +23,29 @@ name: Release App
 #        APPLE_ID                      Apple ID email for notarytool
 #        APPLE_TEAM_ID                 10-character Apple Developer Team ID
 #        APPLE_APP_PASSWORD            app-specific password from appleid.apple.com
-#      Result: a Developer-ID-signed, notarized and stapled dist/FauxCam.dmg.
+#      Result: a Developer-ID-signed and notarized dist/faux (+ dist/faux.zip).
 #
 #   2. Ad-hoc path (fallback when the secrets above are NOT all set). Produces an
-#      UNSIGNED zip. Gatekeeper blocks it on other Macs — users must right-click >
-#      Open, or you must add the secrets above to get the notarized DMG.
+#      UNSIGNED binary. Gatekeeper blocks it on other Macs until the quarantine
+#      attribute is removed.
 #
 # No identity or password is ever hardcoded; everything comes from secrets.
 
 on:
   push:
-    tags: [ 'v*' ]
+    tags: [ 'cli-v*' ]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-app-${{ github.ref }}
+  group: release-cli-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
-    name: Build, sign & publish app
+    name: Build, sign & publish CLI
     # Package.swift needs Swift tools 6.3 (Xcode 26) and targets .macOS(.v26).
     runs-on: macos-26
     env:
@@ -61,10 +63,6 @@ jobs:
         run: |
           swift --version
           xcodebuild -version
-
-      # create-dmg packages the modern app-only DMG produced by sign-app.sh.
-      - name: Install create-dmg
-        run: brew install create-dmg
 
       # --- Notarized path ---------------------------------------------------
 
@@ -97,79 +95,107 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
 
-          # Stored under NOTARY_PROFILE so sign-app.sh's NOTARIZE_PROFILE finds it.
+          # Stored under NOTARY_PROFILE so package-cli.sh's NOTARIZE_PROFILE finds it.
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" --keychain "$KEYCHAIN_PATH"
 
           rm -f "$CERTIFICATE_PATH"
 
-      - name: Build, sign, notarize and package DMG
+      - name: Build, sign and notarize CLI
         if: env.HAS_SIGNING_SECRETS == 'true'
         env:
           NOTARIZE_PROFILE: ${{ env.NOTARY_PROFILE }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: bash Scripts/sign-app.sh "$MACOS_SIGNING_IDENTITY"
+        run: bash Scripts/package-cli.sh "$MACOS_SIGNING_IDENTITY"
 
-      - name: Publish release (notarized DMG)
+      - name: Publish release (notarized CLI)
         if: env.HAS_SIGNING_SECRETS == 'true' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: FauxCam ${{ github.ref_name }}
+          name: faux CLI ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/FauxCam.dmg
+            dist/faux
+            dist/faux.zip
           body: |
-            ## FauxCam ${{ github.ref_name }}
+            ## faux CLI ${{ github.ref_name }}
 
-            Developer-ID-signed, notarized and stapled. Download `FauxCam.dmg`,
-            open it, and drag **FauxCam.app** to Applications.
+            `faux` is the standalone, Developer-ID-signed and notarized
+            command-line tool for FauxCam. It requires macOS 26.
 
-            The standalone `faux` CLI ships separately under the `cli-v*` tags —
-            see the latest **faux CLI** release.
+            ### Install
 
-            Requires macOS 26.
+            Download `faux` (or unzip `faux.zip`) and move it onto your `PATH`:
+
+            ```sh
+            chmod +x faux
+            sudo mv faux /usr/local/bin/faux
+            ```
+
+            A bare command-line binary cannot have its notarization ticket
+            stapled, so on the first run macOS may still quarantine it. If you
+            see a Gatekeeper warning, clear the quarantine attribute once:
+
+            ```sh
+            xattr -d com.apple.quarantine /usr/local/bin/faux
+            ```
+
+            The FauxCam menu-bar **app** ships separately under the `v*` tags —
+            see the latest **FauxCam** release.
 
             See the README for usage, CONTRIBUTING.md to contribute, SECURITY.md
             to report issues, and LICENSE (MIT) for terms.
 
       # --- Ad-hoc fallback path --------------------------------------------
 
-      - name: Build (ad-hoc) and package unsigned zip
+      - name: Build (ad-hoc) CLI
         if: env.HAS_SIGNING_SECRETS != 'true'
-        run: |
-          set -euo pipefail
-          bash Scripts/sign-app.sh -
-          STAGE="$RUNNER_TEMP/FauxCam"
-          rm -rf "$STAGE"; mkdir -p "$STAGE"
-          cp -R dist/FauxCam.app "$STAGE/FauxCam.app"
-          ditto -c -k --sequesterRsrc --keepParent "$STAGE" dist/FauxCam-unsigned.zip
+        run: bash Scripts/package-cli.sh -
 
-      - name: Publish release (unsigned zip)
+      - name: Publish release (unsigned CLI)
         if: env.HAS_SIGNING_SECRETS != 'true' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: FauxCam ${{ github.ref_name }}
+          name: faux CLI ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            dist/FauxCam-unsigned.zip
+            dist/faux
+            dist/faux.zip
           body: |
-            ## FauxCam ${{ github.ref_name }} (unsigned build)
+            ## faux CLI ${{ github.ref_name }} (unsigned build)
 
             > **Warning:** this build is **ad-hoc signed only** — it is NOT signed
             > with a Developer ID and NOT notarized. macOS Gatekeeper will block it
-            > on other Macs. To run it: unzip `FauxCam-unsigned.zip`, then
-            > right-click **FauxCam.app** > **Open** and confirm once.
+            > on other Macs.
             >
             > Maintainers: add the `MACOS_CERTIFICATE_P12_BASE64`,
             > `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`,
             > `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` repository secrets to ship a
-            > notarized DMG instead (see .github/workflows/release.yml).
+            > notarized CLI instead (see .github/workflows/release-cli.yml).
 
-            The archive contains **FauxCam.app**. The standalone `faux` CLI ships
-            separately under the `cli-v*` tags. Requires macOS 26.
+            `faux` is the standalone command-line tool for FauxCam. It requires
+            macOS 26.
+
+            ### Install
+
+            Download `faux` (or unzip `faux.zip`) and move it onto your `PATH`:
+
+            ```sh
+            chmod +x faux
+            sudo mv faux /usr/local/bin/faux
+            ```
+
+            Because this build is unsigned, clear the quarantine attribute before
+            the first run:
+
+            ```sh
+            xattr -d com.apple.quarantine /usr/local/bin/faux
+            ```
+
+            The FauxCam menu-bar **app** ships separately under the `v*` tags.
 
             See the README for usage, CONTRIBUTING.md to contribute, SECURITY.md
             to report issues, and LICENSE (MIT) for terms.
