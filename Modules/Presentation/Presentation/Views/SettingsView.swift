@@ -127,19 +127,19 @@ public struct SettingsView: View {
     private var appVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
 
     private var appIcon: some View {
-        AppIconImage(resource: "faux_logo", size: 56, corner: 13)
+        AppIconImage(size: 56, corner: 13)
     }
 }
 
-/// Loads a bundled PNG app icon, falling back to an SF Symbol (shared by the settings header + onboarding).
+/// The FauxCam logo (`Brand.logo`) rendered as a rounded app-icon tile, falling back to an SF Symbol
+/// (shared by the settings header + onboarding).
 struct AppIconImage: View {
-    let resource: String
     let size: CGFloat
     var corner: CGFloat = 13
     var shadowRadius: CGFloat = 5
     var body: some View {
-        if let url = Bundle.main.url(forResource: resource, withExtension: "png"), let image = NSImage(contentsOf: url) {
-            Image(nsImage: image).resizable().frame(width: size, height: size)
+        if let logo = Brand.logo {
+            Image(nsImage: logo).resizable().frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
                 .shadow(color: .black.opacity(0.25), radius: shadowRadius, y: 2)
         } else {

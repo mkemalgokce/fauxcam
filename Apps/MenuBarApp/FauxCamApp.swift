@@ -205,20 +205,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The menu-bar glyph: the bundled `menubar` line-art rendered as an 18pt template image, with an SF
-    /// Symbol fallback so the label ALWAYS renders even when the bundled asset is missing.
-    static var menuBarIcon: NSImage {
-        let height = 18.0
-        if let url = Bundle.main.url(forResource: "menubar", withExtension: "png"),
-           let icon = NSImage(contentsOf: url), icon.size.height > 0 {
-            let aspectRatio = icon.size.width / icon.size.height
-            icon.size = NSSize(width: height * aspectRatio, height: height)
-            icon.isTemplate = true
-            icon.accessibilityDescription = "FauxCam"
-            return icon
-        }
-        let fallback = NSImage(systemSymbolName: "camera.aperture", accessibilityDescription: "FauxCam") ?? NSImage()
-        fallback.isTemplate = true
-        return fallback
-    }
+    private static let menuBarGlyphHeight = 18.0
+
+    /// The menu-bar glyph: the `menubar` line-art template image (resolved via `Brand` from the
+    /// Presentation resource bundle), with an SF Symbol fallback baked into `Brand.menuBarGlyph`.
+    static var menuBarIcon: NSImage { Brand.menuBarGlyph(height: menuBarGlyphHeight) }
 }

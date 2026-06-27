@@ -38,7 +38,8 @@ let package = Package(
         // Presentation (SwiftUI views + view models) sees every feature's Application/Domain.
         .target(name: "Presentation",
                 dependencies: ["Kernel", "Capture", "Streaming", "Simulators", "Injection", "Framing"],
-                path: "Modules/Presentation"),
+                path: "Modules/Presentation",
+                resources: [.process("Presentation/Resources")]),
 
         // Composition roots.
         .executableTarget(name: "FauxCamApp",

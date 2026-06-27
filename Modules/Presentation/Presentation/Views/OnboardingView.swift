@@ -29,7 +29,7 @@ struct OnboardingView: View {
     }
 
     private var icon: some View {
-        AppIconImage(resource: "faux_logo", size: 76, corner: 17, shadowRadius: 6)
+        AppIconImage(size: 76, corner: 17, shadowRadius: 6)
     }
 
     private func bullet(_ symbol: String, _ text: String) -> some View {
