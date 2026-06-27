@@ -58,6 +58,9 @@ public struct RootView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
 
+            DeviceControlBar(session: session)
+                .padding(.horizontal, 16)
+
             sourcePicker
                 .padding(.horizontal, 16)
                 .popoverTip(SourceTip(), arrowEdge: .top)
@@ -85,9 +88,9 @@ public struct RootView: View {
         }
     }
 
+    /// Selected device or its orientation changed: re-render the preview at the new screen aspect and
+    /// re-advertise that device's injected frame size so the app fills the same as the preview.
     private func deviceChanged() {
-        // Selected device or its orientation changed → re-render the preview at the new screen aspect
-        // and re-advertise that device's injected frame size so the app fills the same as the preview.
         reconfigurePreview()
         Task { await session.applyFrameSize(forSelectedDevice: session.previewAspect) }
     }

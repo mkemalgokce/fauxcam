@@ -1,16 +1,14 @@
 import Foundation
 
-/// Render resolutions + the even-rounded pixel sizing helper, in one place so the injected frame, the
-/// main viewfinder, and the bezel never drift apart. All three derive their pixel size from the SAME
-/// `size(forAspect:)` (passed the selected/per device's SCREEN aspect) so they are identical framings
-/// at different resolutions. A frame at the device's own screen aspect fills that device.
+/// Render resolutions + the even-rounded pixel sizing helper, in one place so the injected frame and
+/// the main viewfinder never drift apart. Both derive their pixel size from the SAME `size(forAspect:)`
+/// (passed the selected/per device's SCREEN aspect) so they are the identical framing at different
+/// resolutions. A frame at the device's own screen aspect fills that device.
 public enum OutputResolution {
     /// Injected simulator frame short side, in pixels.
     public static let captureShortSide = 720
     /// Main viewfinder render long side, in points.
     public static let previewLongSide = 480.0
-    /// Device PiP render long side, in points.
-    public static let bezelLongSide = 180.0
     /// Fallback screen aspect (width / height) of a portrait phone, used when no device aspect is known.
     public static let defaultPortraitAspect = 9.0 / 19.5
     /// Default streamed frame rate, in frames per second.

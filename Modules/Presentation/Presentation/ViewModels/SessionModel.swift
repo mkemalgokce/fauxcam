@@ -119,7 +119,7 @@ public final class SessionModel {
     public var nativeDeviceAspect: Double { deviceAspect > 0 ? deviceAspect : OutputResolution.defaultPortraitAspect }
 
     /// The SCREEN aspect (orientation-flipped) used by both preview + injection for the selected device.
-    /// A frame at this aspect fills that device, so preview, bezel, and simulator all match.
+    /// A frame at this aspect fills that device, so the viewfinder and the simulator match.
     public var previewAspect: Double { deviceLandscape ? 1 / nativeDeviceAspect : nativeDeviceAspect }
 
     public var sourceDescriptor: SourceDescriptor {
@@ -172,11 +172,12 @@ public final class SessionModel {
         rebuildSource()
     }
 
-    /// Re-advertise the selected sim's frame size (e.g. its aspect/orientation changed) so apps relaunch
-    /// at the new size.
+    /// Re-advertise the selected sim's frame size at the given screen aspect (e.g. its aspect/orientation
+    /// changed) so apps relaunch at the new size. The aspect is forwarded to injection so the manual
+    /// orientation override reaches the injected frame, keeping it identical to the viewfinder.
     public func applyFrameSize(forSelectedDevice aspect: Double) async {
         guard isInjecting, !selectedUDID.isEmpty else { return }
-        await injection.refreshFrameSize(forDevice: selectedUDID)
+        await injection.refreshFrameSize(forDevice: selectedUDID, aspect: aspect)
     }
 
     // MARK: Injection

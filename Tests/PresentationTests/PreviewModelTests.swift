@@ -8,7 +8,6 @@ import Framing
 @MainActor
 struct PreviewModelTests {
     private static let previewLong = Int(OutputResolution.previewLongSide)
-    private static let bezelLong = Int(OutputResolution.bezelLongSide)
 
     /// Runs the loop just long enough to capture at least one tick's demands, then stops it.
     private func capturedDemands(outputAspect: Double, configure: (PreviewModel) -> Void = { _ in }) async -> [Demand] {
@@ -21,13 +20,11 @@ struct PreviewModelTests {
         return producer.demands
     }
 
-    @Test func portraitAspectSizesBothDemandsByTheirLongSide() async {
+    @Test func portraitAspectSizesTheSingleDemandByItsLongSide() async {
         let demands = await capturedDemands(outputAspect: 9.0 / 19.5)
-        let viewfinder = demands.filter { max($0.requestedWidth, $0.requestedHeight) == Self.previewLong }
-        let bezel = demands.filter { max($0.requestedWidth, $0.requestedHeight) == Self.bezelLong }
-        #expect(!viewfinder.isEmpty)
-        #expect(!bezel.isEmpty)
+        #expect(!demands.isEmpty)
         for demand in demands {
+            #expect(max(demand.requestedWidth, demand.requestedHeight) == Self.previewLong)
             #expect(demand.position == .back)
             #expect(demand.requestedHeight >= demand.requestedWidth)
             let ratio = Double(demand.requestedWidth) / Double(demand.requestedHeight)
@@ -35,11 +32,18 @@ struct PreviewModelTests {
         }
     }
 
+    @Test func everyTickPullsOnlyTheViewfinderDemand() async {
+        let demands = await capturedDemands(outputAspect: 9.0 / 19.5)
+        #expect(!demands.isEmpty)
+        for demand in demands {
+            #expect(max(demand.requestedWidth, demand.requestedHeight) == Self.previewLong)
+        }
+    }
+
     @Test func landscapeAspectMakesWidthTheLongSide() async {
         let demands = await capturedDemands(outputAspect: 16.0 / 9.0)
-        let viewfinder = demands.filter { max($0.requestedWidth, $0.requestedHeight) == Self.previewLong }
-        #expect(!viewfinder.isEmpty)
-        for demand in viewfinder {
+        #expect(!demands.isEmpty)
+        for demand in demands {
             #expect(demand.requestedWidth == Self.previewLong)
             let ratio = Double(demand.requestedWidth) / Double(demand.requestedHeight)
             #expect(abs(ratio - 16.0 / 9.0) < 0.05)
@@ -86,6 +90,5 @@ struct PreviewModelTests {
         model.stop()
         model.rebuild()
         #expect(model.sourceImage == nil)
-        #expect(model.deviceImage == nil)
     }
 }

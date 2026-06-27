@@ -80,11 +80,12 @@ public actor AutoInjectionService {
         injected = injected.intersection(stillBooted).union(succeeded)
     }
 
-    /// Re-advertise a device's frame size (e.g. its aspect changed) so apps relaunch at the new size.
-    /// Size-only — leaves the already-set DYLD untouched.
-    public func refreshFrameSize(forDevice udid: String) async {
+    /// Re-advertise a device's frame size at the given screen aspect (e.g. its aspect or the manual
+    /// orientation override changed) so apps relaunch at the new size. Size-only — leaves the already-set
+    /// DYLD untouched. The explicit aspect is honored so the injected frame matches the preview exactly.
+    public func refreshFrameSize(forDevice udid: String, aspect screenAspect: Double) async {
         guard injected.contains(udid) else { return }
-        await env.setFrameSize(await frameSize(forDevice: udid), onDevices: [udid])
+        await env.setFrameSize(frameSize(forAspect: screenAspect), onDevices: [udid])
     }
 
     public func disable() async {
@@ -133,7 +134,12 @@ public actor AutoInjectionService {
 
     private func frameSize(forDevice udid: String) async -> FrameSize {
         let aspect = await aspects.screenAspect(forDeviceWithUDID: udid) ?? OutputResolution.defaultPortraitAspect
-        let size = OutputResolution.size(forAspect: aspect)
+        return frameSize(forAspect: aspect)
+    }
+
+    private func frameSize(forAspect aspect: Double) -> FrameSize {
+        let safeAspect = aspect > 0 ? aspect : OutputResolution.defaultPortraitAspect
+        let size = OutputResolution.size(forAspect: safeAspect)
         return FrameSize(width: size.width, height: size.height, fps: fps)
     }
 

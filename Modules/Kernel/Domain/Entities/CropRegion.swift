@@ -10,7 +10,7 @@ public struct CropRegion: Sendable, Equatable {
     public var centerY: Double
     public var zoom: Double
     /// Free clockwise rotation in radians applied to the source before fitting. Normalized to
-    /// (-π, π]. Applied in the shared scaler so every source AND the device/bezel preview AND every
+    /// (-π, π]. Applied in the shared scaler so every source AND the viewfinder preview AND every
     /// injected simulator rotate together.
     public var rotationRadians: Double
 

@@ -28,10 +28,9 @@ public enum FauxCamTour {
     public static func run() async {
         isArmed = true
         await present(SourceTip(), index: 0, needsFraming: false)
-        await present(GesturesTip(), index: 1, needsFraming: true)
-        await present(RotateTip(), index: 2, needsFraming: true)
-        await present(DeviceTip(), index: 3, needsFraming: false)
-        await present(InjectionTip(), index: 4, needsFraming: false)
+        await present(RotateTip(), index: 1, needsFraming: true)
+        await present(DeviceTip(), index: 2, needsFraming: false)
+        await present(InjectionTip(), index: 3, needsFraming: false)
         step = -1
     }
 
@@ -57,18 +56,6 @@ struct SourceTip: Tip {
     }
 }
 
-struct GesturesTip: Tip {
-    var title: Text { Text("Frame what the simulator sees") }
-    var message: Text? {
-        Text("**Drag** to move · **scroll** or **pinch** to zoom · **two-finger twist** to rotate. The **↺** badge resets the framing.")
-    }
-    var image: Image? { Image(systemName: "hand.draw") }
-    var rules: [Rule] {
-        #Rule(FauxCamTour.$isArmed) { $0 == true }
-        #Rule(FauxCamTour.$step) { $0 == 1 }
-    }
-}
-
 struct RotateTip: Tip {
     var title: Text { Text("Rotate in one tap") }
     var message: Text? {
@@ -77,19 +64,19 @@ struct RotateTip: Tip {
     var image: Image? { Image(systemName: "rotate.right") }
     var rules: [Rule] {
         #Rule(FauxCamTour.$isArmed) { $0 == true }
-        #Rule(FauxCamTour.$step) { $0 == 2 }
+        #Rule(FauxCamTour.$step) { $0 == 1 }
     }
 }
 
 struct DeviceTip: Tip {
-    var title: Text { Text("Device preview") }
+    var title: Text { Text("Choose the device") }
     var message: Text? {
-        Text("The small phone mirrors one simulator. Its two buttons **rotate the device** and **choose which simulator** to preview.")
+        Text("Pick **which booted simulator** the viewfinder mirrors, and flip it between **portrait and landscape** — the feed reshapes to that device's screen.")
     }
     var image: Image? { Image(systemName: "iphone.gen3") }
     var rules: [Rule] {
         #Rule(FauxCamTour.$isArmed) { $0 == true }
-        #Rule(FauxCamTour.$step) { $0 == 3 }
+        #Rule(FauxCamTour.$step) { $0 == 2 }
     }
 }
 
@@ -101,6 +88,6 @@ struct InjectionTip: Tip {
     var image: Image? { Image(systemName: "bolt.badge.automatic") }
     var rules: [Rule] {
         #Rule(FauxCamTour.$isArmed) { $0 == true }
-        #Rule(FauxCamTour.$step) { $0 == 4 }
+        #Rule(FauxCamTour.$step) { $0 == 3 }
     }
 }

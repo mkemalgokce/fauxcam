@@ -23,23 +23,30 @@ struct ViewfinderCard: View {
     @State private var rotationCommit: DispatchWorkItem?
     @State private var rotationBaseRadians: Double = 0
     @State private var liveRotationRadians: Double?
+    /// Whether the framing gesture hint caption is on screen. Shown once a framing source's first frame
+    /// has rendered, then auto-dismissed after a few seconds — animated normally, instant under Reduce
+    /// Motion so it never lingers over the live feed.
+    @State private var gestureHintVisible = false
 
     private static let cardHeight: CGFloat = 188
     private static let cardInnerWidth: CGFloat = 328
+    private static let gestureHintVisibleSeconds: Double = 4
+    private static let gestureHintFadeDuration: Double = 0.25
+    private static let firstFramePollSeconds: Double = 0.1
+    private static let zoomStepFactor: Double = 1.2
+    private static let goodFramesPerSecond: Double = 20
+    private static let okFramesPerSecond: Double = 12
 
     private var needsCameraPermission: Bool {
         session.sourceKind == .webcam && camera.status != .authorized
     }
 
-    private var currentZoom: Double { liveZoom ?? session.region.zoom }
-    private var currentRotation: Double { liveRotationRadians ?? session.region.rotationRadians }
-
-    private var rotationAnimation: Animation? {
-        reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78)
+    private var framingActive: Bool {
+        session.sourceKind.supportsFraming && !needsCameraPermission
     }
 
-    /// The bezel shape follows the DEVICE ORIENTATION (portrait/landscape), independent of image rotation.
-    private var bezelAspect: CGFloat { CGFloat(session.previewAspect) }
+    private var currentZoom: Double { liveZoom ?? session.region.zoom }
+    private var currentRotation: Double { liveRotationRadians ?? session.region.rotationRadians }
 
     /// Builds a region that keeps the CURRENT rotation (and any pending live zoom) — every gesture
     /// derives from this so zoom/drag never silently reset the rotation.
@@ -48,8 +55,8 @@ struct ViewfinderCard: View {
     }
 
     /// Pushes the live crop to BOTH the in-app preview and the injection server (cheap value writes,
-    /// no session.region mutation → no glassy-RootView re-render). So the main viewfinder, the
-    /// bezel PiP, AND every simulator all show the SAME rotation/zoom/pan live during a gesture.
+    /// no session.region mutation → no glassy-RootView re-render). So the main viewfinder AND every
+    /// simulator all show the SAME rotation/zoom/pan live during a gesture.
     private func pushLiveCrop(_ region: CropRegion) {
         preview.setCrop(region)
         session.setCrop(region)
@@ -68,10 +75,6 @@ struct ViewfinderCard: View {
             if needsCameraPermission {
                 permissionContent
             } else if let image = preview.sourceImage {
-                // The frame IS the camera-aspect feed every simulator receives. Show the WHOLE frame
-                // (scaledToFit) on a BLACK card so the preview matches the device exactly — the gutters
-                // are black like the screen, what the user frames is what the app gets. Rotation/zoom/pan
-                // are already baked in by the pixel pipeline.
                 Image(nsImage: image).resizable().scaledToFit()
             } else {
                 ProgressView()
@@ -81,48 +84,80 @@ struct ViewfinderCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.separator, lineWidth: 1))
         .overlay {
-            if session.sourceKind.supportsFraming && !needsCameraPermission {
-                // NSView handles mouse-wheel zoom; SwiftUI handles the trackpad gestures natively
-                // (pinch-zoom + two-finger rotate + pan), composed simultaneously like Apple's apps.
+            if framingActive {
                 ZoomScrollCatcher(onZoom: applyZoom)
                     .gesture(panGesture)
                     .simultaneousGesture(rotateGesture)
                     .simultaneousGesture(magnifyGesture)
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if session.sourceKind.supportsFraming && !needsCameraPermission {
-                HStack(spacing: 8) {
-                    rotateButton
-                        .popoverTip(RotateTip(), arrowEdge: .bottom)
-                    zoomBadge
-                        .popoverTip(GesturesTip(), arrowEdge: .bottom)
-                }
-                .padding(10)
-            }
-        }
         .overlay(alignment: .topLeading) {
             if preview.sourceImage != nil && !needsCameraPermission {
-                fpsBadge.padding(10)
+                fpsBadge.padding(Self.overlayInset)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            DeviceFramePiP(aspect: bezelAspect,
-                           animation: rotationAnimation,
-                           isLandscape: session.deviceLandscape,
-                           onToggleOrientation: { withAnimation(rotationAnimation) { session.toggleDeviceOrientation() } },
-                           devices: session.devices,
-                           selectedUDID: session.selectedUDID,
-                           onSelectDevice: { session.selectDevice($0) }) {
-                if let image = preview.deviceImage {
-                    Image(nsImage: image).resizable().scaledToFill()
-                } else {
-                    Color.black
-                }
+        .overlay(alignment: .topTrailing) {
+            if framingActive {
+                framingControls.padding(Self.overlayInset)
             }
-            .padding(10)
-            .help("How the frame maps onto the selected device — the source fit to the screen")
         }
+        .overlay(alignment: .bottom) {
+            if framingActive && preview.sourceImage != nil && gestureHintVisible {
+                gestureHint
+                    .padding(.bottom, Self.overlayInset)
+                    .transition(reduceMotion ? .identity : .opacity)
+            }
+        }
+        .task(id: gestureHintResetToken) { await runGestureHint() }
+    }
+
+    private static let overlayInset: CGFloat = 10
+
+    private var framingControls: some View {
+        HStack(spacing: 8) {
+            rotateButton.popoverTip(RotateTip(), arrowEdge: .bottom)
+            zoomBadge
+        }
+    }
+
+    /// Re-arms the gesture hint whenever the framing context changes (source switched or camera access
+    /// granted/revoked), so it re-appears for each newly framable source.
+    private var gestureHintResetToken: String {
+        "\(session.sourceKind.rawValue)-\(framingActive)"
+    }
+
+    /// Shows the framing hint once the first frame is on screen, holds it for a few seconds, then always
+    /// dismisses it. Reduce Motion only suppresses the fade animation (the dismissal still happens), so
+    /// the hint never permanently occludes the live feed.
+    private func runGestureHint() async {
+        guard framingActive else { gestureHintVisible = false; return }
+        await waitForFirstFrame()
+        guard !Task.isCancelled, framingActive else { return }
+        gestureHintVisible = true
+        try? await Task.sleep(for: .seconds(Self.gestureHintVisibleSeconds))
+        guard !Task.isCancelled else { return }
+        if reduceMotion {
+            gestureHintVisible = false
+        } else {
+            withAnimation(.easeOut(duration: Self.gestureHintFadeDuration)) { gestureHintVisible = false }
+        }
+    }
+
+    private func waitForFirstFrame() async {
+        while preview.sourceImage == nil && !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Self.firstFramePollSeconds))
+        }
+    }
+
+    private var gestureHint: some View {
+        Label("Drag to move · Scroll or pinch to zoom · Twist to rotate", systemImage: "hand.draw")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: .capsule)
+            .help("Frame what every simulator sees")
+            .accessibilityLabel("Drag to move, scroll or pinch to zoom, twist to rotate")
     }
 
     private var permissionContent: some View {
@@ -143,7 +178,7 @@ struct ViewfinderCard: View {
 
     private var fpsBadge: some View {
         HStack(spacing: 4) {
-            Circle().fill(preview.fps >= 20 ? .green : (preview.fps >= 12 ? .yellow : .orange))
+            Circle().fill(fpsTierColor)
                 .frame(width: 5, height: 5)
             Text("\(preview.fps, format: .number.precision(.fractionLength(0))) fps")
                 .font(.caption2.monospacedDigit().weight(.semibold))
@@ -152,12 +187,25 @@ struct ViewfinderCard: View {
         .padding(.horizontal, 8).padding(.vertical, 4)
         .glassEffect(.regular, in: .capsule)
         .help("Live preview frame rate")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Preview frame rate")
+        .accessibilityValue("\(Int(preview.fps.rounded())) fps, \(fpsTierLabel)")
+    }
+
+    private var fpsTierColor: Color {
+        if preview.fps >= Self.goodFramesPerSecond { return .green }
+        return preview.fps >= Self.okFramesPerSecond ? .yellow : .orange
+    }
+
+    private var fpsTierLabel: String {
+        if preview.fps >= Self.goodFramesPerSecond { return "good" }
+        return preview.fps >= Self.okFramesPerSecond ? "ok" : "low"
     }
 
     /// Apple-native trackpad two-finger rotate. `value.rotation` is the ABSOLUTE angle since the gesture
     /// began; add it to the committed base captured at start. The live angle is pushed through the
-    /// pixel pipeline to the preview AND the injection, so the main viewfinder, the bezel, and the
-    /// simulator all show the SAME rotation live (no view-only transform → no preview/simulator drift).
+    /// pixel pipeline to the preview AND the injection, so the viewfinder and the simulator show the SAME
+    /// rotation live (no view-only transform → no preview/simulator drift).
     private var rotateGesture: some Gesture {
         RotateGesture(minimumAngleDelta: .degrees(1))
             .onChanged { value in
@@ -214,7 +262,6 @@ struct ViewfinderCard: View {
 
     private var rotateButton: some View {
         Button {
-            // Instant 90° clockwise step (snapped), folding in any live zoom.
             rotationCommit?.cancel(); zoomCommit?.cancel()
             let snapped = snapToRightAngle(session.region.rotationRadians + .pi / 2)
             session.region = CropRegion(centerX: session.region.centerX,
@@ -231,13 +278,18 @@ struct ViewfinderCard: View {
         .padding(7)
         .glassEffect(.regular, in: .circle)
         .help("Rotate the image 90° — applies to the preview and every injected simulator")
+        .accessibilityLabel("Rotate image 90 degrees clockwise")
     }
 
     private var zoomBadge: some View {
         HStack(spacing: 5) {
+            zoomStepButton(systemImage: "minus", label: "Zoom out", factor: 1 / Self.zoomStepFactor)
             Image(systemName: "magnifyingglass").font(.caption2.weight(.semibold))
             Text(String(format: "%.1f×", currentZoom))
                 .font(.caption.monospacedDigit().weight(.semibold))
+                .accessibilityLabel("Zoom level")
+                .accessibilityValue(String(format: "%.1f times", currentZoom))
+            zoomStepButton(systemImage: "plus", label: "Zoom in", factor: Self.zoomStepFactor)
             if currentZoom != 1 || !session.region.isCentered || session.region.isRotated {
                 Divider().frame(height: 11)
                 Button {
@@ -247,7 +299,7 @@ struct ViewfinderCard: View {
                 } label: {
                     Image(systemName: "arrow.counterclockwise").font(.caption2.weight(.semibold))
                 }
-                .buttonStyle(.plain).help("Reset framing")
+                .buttonStyle(.plain).help("Reset framing").accessibilityLabel("Reset framing")
             }
         }
         .foregroundStyle(.white)
@@ -256,13 +308,20 @@ struct ViewfinderCard: View {
         .help("Scroll or pinch to zoom · drag to move · ⌥-scroll (or two-finger twist) to rotate")
     }
 
+    private func zoomStepButton(systemImage: String, label: String, factor: Double) -> some View {
+        Button { applyZoom(factor) } label: {
+            Image(systemName: systemImage).font(.caption2.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
     private func applyZoom(_ factor: Double) {
         guard factor > 0 else { return }
         let newZoom = max(0.1, currentZoom * factor)
         liveZoom = newZoom
-        // Live to preview + injection (no per-event RootView re-render); keeps the current rotation.
         pushLiveCrop(region(centerX: session.region.centerX, centerY: session.region.centerY, zoom: newZoom))
-        // Debounced commit: write the observed region once after scrolling/pinching settles.
         zoomCommit?.cancel()
         let work = DispatchWorkItem {
             MainActor.assumeIsolated {
@@ -286,14 +345,9 @@ struct ViewfinderCard: View {
         DragGesture()
             .onChanged { value in
                 if dragStart == nil { dragStart = (session.region.centerX, session.region.centerY) }
-                // Feed the live crop straight to the preview AND the injection (cheap locked writes the
-                // render timer + the injection pump read each frame). We do NOT mutate the observed
-                // `session.region` here — that re-rendered the whole glassy RootView on every
-                // mouse-move, starving the preview timer (the drag stutter / fps drop).
                 pushLiveCrop(regionForDrag(value.translation))
             }
             .onEnded { value in
-                // Commit once at the end: this is the only RootView re-render for the whole drag.
                 if dragStart != nil { session.region = regionForDrag(value.translation) }
                 dragStart = nil
             }

@@ -63,5 +63,6 @@ struct SourceTabBar: View {
         .glassEffect(selected ? .regular.tint(.accentColor).interactive() : .regular.interactive(),
                      in: .rect(cornerRadius: 9))
         .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

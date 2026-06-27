@@ -60,7 +60,7 @@ enum OnboardingGate {
 
 /// Owns and wires every concrete adapter (the only place adapters are built) and runs the app-level
 /// injection job: a 4s device poll that injects newly-booted simulators and forgets shut-down ones,
-/// plus device-aspect feedback that re-sizes the preview bezel + re-advertises each device's frame size.
+/// plus device-aspect feedback that re-sizes the viewfinder + re-advertises each device's frame size.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -76,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let simulators: any SimulatorRepository
 
     private var pollTask: Task<Void, Never>?
-    private var lastBezelAspect: Double = OutputResolution.defaultPortraitAspect
+    private var lastAppliedAspect: Double = OutputResolution.defaultPortraitAspect
 
     private static let dylibResourceName = "libFaux"
     private static let dylibFileExtension = "dylib"
@@ -106,8 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.simulators = simulators
         self.settings = settings
 
-        // The preview opens at the default portrait phone aspect; device-aspect feedback re-sizes the
-        // bezel + viewfinder as the selected simulator / orientation changes (see `applyDeviceAspect`).
         self.preview = PreviewModel(source: switchable, cropStore: cropStore,
                                     outputAspect: OutputResolution.defaultPortraitAspect)
         self.session = SessionModel(factory: factory, switchable: switchable, cropStore: cropStore,
@@ -175,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let teardownTimeout: DispatchTimeInterval = .seconds(3)
 
     /// The app-level injection job: every 4s, refresh booted devices, keep the injected set in sync, and
-    /// feed the selected device's screen aspect back into the preview bezel + the injected frame size.
+    /// feed the selected device's screen aspect back into the viewfinder + the injected frame size.
     private func startPolling() {
         guard pollTask == nil else { return }
         session.startPolling()
@@ -192,13 +190,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await applyDeviceAspect()
     }
 
-    /// Device-aspect feedback for the bezel: the selected device's orientation-flipped screen aspect
-    /// drives BOTH preview demands (viewfinder + bezel PiP) and re-advertises that device's frame size.
+    /// Device-aspect feedback: the selected device's orientation-flipped screen aspect drives the single
+    /// viewfinder demand and re-advertises that device's injected frame size, so the two stay identical.
     private func applyDeviceAspect() async {
         await session.refreshDeviceAspect()
         let aspect = session.previewAspect
-        guard aspect > 0, aspect != lastBezelAspect else { return }
-        lastBezelAspect = aspect
+        guard aspect > 0, aspect != lastAppliedAspect else { return }
+        lastAppliedAspect = aspect
         preview.setOutputAspect(aspect)
         await session.applyFrameSize(forSelectedDevice: aspect)
     }

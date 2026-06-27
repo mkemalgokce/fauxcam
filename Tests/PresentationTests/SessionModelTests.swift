@@ -139,6 +139,16 @@ struct SessionModelDeviceTests {
         harness.model.toggleDeviceOrientation()
         #expect(harness.model.deviceLandscape == true)
     }
+
+    @Test func selectedDeviceResolvesNameAndIsNilWhenNoneBooted() async {
+        let alpha = device("A")
+        let harness = makeSessionHarness(devices: [alpha])
+        #expect(harness.model.selectedDevice == nil)
+        harness.model.startPolling()
+        await eventually { harness.model.selectedDevice == alpha }
+        harness.model.stopPolling()
+        #expect(harness.model.selectedDevice?.name == alpha.name)
+    }
 }
 
 @MainActor

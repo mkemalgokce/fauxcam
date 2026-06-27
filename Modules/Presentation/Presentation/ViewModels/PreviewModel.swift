@@ -3,21 +3,19 @@ import Observation
 import Kernel
 import Framing
 
-/// Drives the in-app preview from the SAME source the simulators get. On a 24fps loop it pulls two
-/// frames from the shared `FrameProducing` — the main viewfinder at the preview long-side and the
-/// device PiP at the bezel long-side, BOTH composed to the one `outputAspect` (the selected device's
-/// screen aspect = the injected aspect) — and publishes them as images plus a measured fps. The live
-/// crop is written straight into `CropStore`, which the source reads per frame, so preview AND every
-/// injected simulator update together. @MainActor + @Observable, constructor-injected ports only.
+/// Drives the in-app preview from the SAME source the simulators get. On a 24fps loop it pulls ONE
+/// frame from the shared `FrameProducing` — the main viewfinder at the preview long-side, composed to
+/// the one `outputAspect` (the selected device's screen aspect = the injected aspect) — and publishes
+/// it as an image plus a measured fps. The live crop is written straight into `CropStore`, which the
+/// source reads per frame, so preview AND every injected simulator update together. The viewfinder is
+/// therefore exactly what each simulator receives; only the pixel resolution differs (preview long-side
+/// vs capture short-side). @MainActor + @Observable, constructor-injected ports only.
 @MainActor
 @Observable
 public final class PreviewModel {
     /// The source rendered at the selected device's screen aspect — the main viewfinder image
     /// (scaledToFit, letterboxed). `nil` until the first frame / after `rebuild()`.
     public private(set) var sourceImage: NSImage?
-    /// The EXACT frame each simulator receives — the device PiP / bezel image. Same aspect, bezel
-    /// resolution. `nil` until the first frame / after `rebuild()`.
-    public private(set) var deviceImage: NSImage?
     /// Measured delivered frames-per-second (EMA, smoothing 0.85/0.15). Published ~4×/sec; only changes
     /// on a ≥0.1 delta. Starts at 0.
     public private(set) var fps: Double = 0
@@ -51,16 +49,15 @@ public final class PreviewModel {
     public func setCrop(_ region: CropRegion) { cropStore.update(region) }
 
     /// Sets the composed output aspect (= the selected device's screen aspect). Does NOT rebuild the
-    /// source; both demands recompute at this aspect on the next tick.
+    /// source; the viewfinder demand recomputes at this aspect on the next tick.
     public func setOutputAspect(_ aspect: Double) {
         outputAspect = aspect > 0 ? aspect : OutputResolution.defaultPortraitAspect
     }
 
-    /// Clears `sourceImage`/`deviceImage` to nil; the next ticks re-prime. Used e.g. after camera
-    /// permission is granted so the webcam source can open.
+    /// Clears `sourceImage` to nil; the next ticks re-prime. Used e.g. after camera permission is
+    /// granted so the webcam source can open.
     public func rebuild() {
         sourceImage = nil
-        deviceImage = nil
     }
 
     /// Starts the idempotent 24fps loop on the main actor.
@@ -88,24 +85,16 @@ public final class PreviewModel {
         guard !pulling else { return }
         pulling = true
         defer { pulling = false }
-        let aspect = outputAspect
-        let naturalDemand = Self.demand(forAspect: aspect, longSide: OutputResolution.previewLongSide)
-        let deviceDemand = Self.demand(forAspect: aspect, longSide: OutputResolution.bezelLongSide)
+        let viewfinderDemand = Self.demand(forAspect: outputAspect, longSide: OutputResolution.previewLongSide)
         let source = self.source
-        let boxes: (natural: CGImageBox?, device: CGImageBox?) = await Task.detached(priority: .userInitiated) {
-            let naturalFrame = try? await source.frame(for: naturalDemand)
-            let deviceFrame = try? await source.frame(for: deviceDemand)
-            return (naturalFrame.flatMap(Self.makeCGImageBox), deviceFrame.flatMap(Self.makeCGImageBox))
+        let box: CGImageBox? = await Task.detached(priority: .userInitiated) {
+            let frame = try? await source.frame(for: viewfinderDemand)
+            return frame.flatMap(Self.makeCGImageBox)
         }.value
-        if let natural = boxes.natural {
-            sourceImage = NSImage(cgImage: natural.image,
-                                  size: NSSize(width: natural.image.width, height: natural.image.height))
-        }
-        if let device = boxes.device {
-            deviceImage = NSImage(cgImage: device.image,
-                                  size: NSSize(width: device.image.width, height: device.image.height))
-        }
-        if boxes.natural != nil { recordFrameForFPS() }
+        guard let box else { return }
+        sourceImage = NSImage(cgImage: box.image,
+                              size: NSSize(width: box.image.width, height: box.image.height))
+        recordFrameForFPS()
     }
 
     private func recordFrameForFPS() {

@@ -30,7 +30,7 @@ public struct SettingsView: View {
                 } header: {
                     Text("General")
                 } footer: {
-                    Text("Choose which simulator's bezel the preview mirrors right on the device preview — every booted simulator is injected at its own aspect.")
+                    Text("Each booted simulator is injected at its own screen aspect; the viewfinder mirrors what every simulator receives.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
