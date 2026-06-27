@@ -52,8 +52,11 @@ public final class SessionModel {
     // MARK: Orientation / aspect
 
     public private(set) var deviceAspect: Double = OutputResolution.defaultPortraitAspect
-    /// Manual orientation override for the SELECTED device. true = landscape. Flips the preview + that
-    /// device's injected feed when the auto-detected screen orientation isn't what the user wants.
+    /// Manual orientation override, remembered per device and restored on selection. true = landscape.
+    /// One shared frame pump feeds every booted simulator, so the live injected feed always reflects the
+    /// currently-selected device's orientation rather than an independent per-simulator value.
+    // TODO: per-simulator independent orientation needs per-device frame composition — the pump fans one
+    // composed source to all guests with no per-device identity in the demand.
     public var deviceLandscape: Bool = false
 
     // MARK: Injection
@@ -122,6 +125,11 @@ public final class SessionModel {
     /// A frame at this aspect fills that device, so the viewfinder and the simulator match.
     public var previewAspect: Double { deviceLandscape ? 1 / nativeDeviceAspect : nativeDeviceAspect }
 
+    /// The source rotation folded into the shared crop while in landscape, so the preview and the injected
+    /// feed turn together. The fixed quarter turn assumes a portrait-native source; a landscape-native
+    /// source (e.g. the webcam) is already upright and may need no rotation.
+    public var orientationRadians: Double { deviceLandscape ? Self.landscapeRotationRadians : 0 }
+
     public var sourceDescriptor: SourceDescriptor {
         switch sourceKind {
         case .image: return imagePath.isEmpty ? .testImage : .image(URL(fileURLWithPath: imagePath))
@@ -153,17 +161,16 @@ public final class SessionModel {
     public func setDeviceLandscape(_ landscape: Bool) {
         deviceLandscape = landscape
         if !selectedUDID.isEmpty { orientationCache[selectedUDID] = landscape }
+        applyOrientationToCrop()
     }
 
     // MARK: Crop / source wiring
 
-    /// Live crop sink: writes the shared `CropStore` (the `SwitchableFrameSource` reads it per frame, so
-    /// preview AND every injected simulator update together) and re-syncs the running injection. Cheap;
-    /// safe to call on every gesture frame.
+    /// Live crop sink: writes the shared `CropStore`, which the `SwitchableFrameSource` reads per frame, so
+    /// the preview AND every injected simulator update together off the live pump. Cheap; safe to call on
+    /// every gesture frame.
     public func setCrop(_ region: CropRegion) {
         cropStore.update(region)
-        guard isInjecting else { return }
-        Task { await injection.sync(devices: devices.map(\.udid)) }
     }
 
     /// Swaps the live source on the `SwitchableFrameSource` (read by the preview AND the running
@@ -324,7 +331,14 @@ public final class SessionModel {
         }
     }
 
-    private func restoreOrientation() { deviceLandscape = orientationCache[selectedUDID] ?? false }
+    private func restoreOrientation() {
+        deviceLandscape = orientationCache[selectedUDID] ?? false
+        applyOrientationToCrop()
+    }
+
+    private func applyOrientationToCrop() {
+        cropStore.setOrientation(orientationRadians)
+    }
 
     private func rebuildSource() {
         switchable.setSource(factory.makeSource(sourceDescriptor, crop: cropStore.read))
@@ -360,6 +374,7 @@ public final class SessionModel {
         do { try png.write(to: url); return url.path } catch { return nil }
     }
 
+    private static let landscapeRotationRadians = Double.pi / 2
     private static let imageExtensions = ["png", "jpg", "jpeg", "heic", "heif", "gif", "bmp", "tiff", "webp"]
     private static let videoExtensions = ["mov", "mp4", "m4v", "qt"]
 }

@@ -127,10 +127,14 @@ struct SessionModelDeviceTests {
         let model = harness.model
         model.selectedUDID = "A"
         model.setDeviceLandscape(true)
+
         model.selectDevice("B")
         #expect(model.deviceLandscape == false)
+        #expect(harness.cropStore.read().rotationRadians == 0)
+
         model.selectDevice("A")
         #expect(model.deviceLandscape == true)
+        #expect(abs(harness.cropStore.read().rotationRadians - .pi / 2) < 1e-9)
     }
 
     @Test func toggleOrientationFlipsLandscape() {
@@ -138,6 +142,20 @@ struct SessionModelDeviceTests {
         #expect(harness.model.deviceLandscape == false)
         harness.model.toggleDeviceOrientation()
         #expect(harness.model.deviceLandscape == true)
+    }
+
+    @Test func togglingOrientationRotatesTheCropStoreWithoutMutatingRegion() {
+        let harness = makeSessionHarness()
+        let model = harness.model
+        let regionBefore = model.region
+
+        model.setDeviceLandscape(true)
+        #expect(model.region == regionBefore)
+        #expect(abs(harness.cropStore.read().rotationRadians - .pi / 2) < 1e-9)
+
+        model.setDeviceLandscape(false)
+        #expect(model.region == regionBefore)
+        #expect(harness.cropStore.read().rotationRadians == 0)
     }
 
     @Test func selectedDeviceResolvesNameAndIsNilWhenNoneBooted() async {
