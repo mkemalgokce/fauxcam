@@ -116,16 +116,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
-    /// The guest dylib path: the bundled resource in a packaged `.app`, falling back to `dist/libFaux.dylib`
-    /// under the current directory so `swift run FauxCamApp` from the repo root injects without packaging.
+    /// The guest dylib path: the bundled resource in a packaged `.app`, else a development location so
+    /// `swift run FauxCamApp` and Xcode-run inject without packaging — a `FAUXCAM_DYLIB` override, then the
+    /// repo's `dist/libFaux.dylib` (derived from this source file so it resolves regardless of the launcher's
+    /// working directory), then the current directory.
     private static func resolveDylibPath() -> String {
+        let fileManager = FileManager.default
         if let bundled = Bundle.main.url(forResource: dylibResourceName, withExtension: dylibFileExtension),
-           FileManager.default.fileExists(atPath: bundled.path) {
+           fileManager.fileExists(atPath: bundled.path) {
             return bundled.path
         }
-        return URL(fileURLWithPath: developmentDylibRelativePath,
-                   relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+        if let override = ProcessInfo.processInfo.environment["FAUXCAM_DYLIB"], fileManager.fileExists(atPath: override) {
+            return override
+        }
+        let candidates = developmentDylibCandidates()
+        return candidates.first(where: { fileManager.fileExists(atPath: $0) }) ?? candidates[0]
+    }
+
+    private static func developmentDylibCandidates() -> [String] {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Apps/MenuBarApp
+            .deletingLastPathComponent()   // Apps
+            .deletingLastPathComponent()   // repository root
+        let fromSource = repositoryRoot.appendingPathComponent(developmentDylibRelativePath).path
+        let workingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let fromWorkingDirectory = URL(fileURLWithPath: developmentDylibRelativePath, relativeTo: workingDirectory)
             .standardizedFileURL.path
+        return [fromSource, fromWorkingDirectory]
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
