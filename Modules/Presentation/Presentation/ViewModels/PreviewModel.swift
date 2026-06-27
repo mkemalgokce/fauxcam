@@ -6,25 +6,19 @@ import Framing
 /// Drives the in-app preview from the SAME source the simulators get. On a 24fps loop it pulls ONE
 /// frame from the shared `FrameProducing` — the main viewfinder at the preview long-side, composed to
 /// the one `outputAspect` (the selected device's screen aspect = the injected aspect) — and publishes
-/// it as an image plus a measured fps. The live crop is written straight into `CropStore`, which the
-/// source reads per frame, so preview AND every injected simulator update together. The viewfinder is
-/// therefore exactly what each simulator receives; only the pixel resolution differs (preview long-side
-/// vs capture short-side). @MainActor + @Observable, constructor-injected ports only.
+/// it as an image. The live crop is written straight into `CropStore`, which the source reads per frame,
+/// so preview AND every injected simulator update together. The viewfinder is therefore exactly what
+/// each simulator receives; only the pixel resolution differs (preview long-side vs capture short-side).
+/// @MainActor + @Observable, constructor-injected ports only.
 @MainActor
 @Observable
 public final class PreviewModel {
     /// The source rendered at the selected device's screen aspect — the main viewfinder image
     /// (scaledToFit, letterboxed). `nil` until the first frame / after `rebuild()`.
     public private(set) var sourceImage: NSImage?
-    /// Measured delivered frames-per-second (EMA, smoothing 0.85/0.15). Published ~4×/sec; only changes
-    /// on a ≥0.1 delta. Starts at 0.
-    public private(set) var fps: Double = 0
 
     private static let previewFramesPerSecond = 24
     private static let millisecondsPerSecond = 1000
-    private static let fpsSmoothingFactor = 0.85
-    private static let fpsPublishCadenceTicks = 6
-    private static let fpsPublishThreshold = 0.1
 
     private let source: any FrameProducing
     private let cropStore: CropStore
@@ -32,10 +26,6 @@ public final class PreviewModel {
 
     private var loop: Task<Void, Never>?
     private var pulling = false
-
-    private var lastFrameTime: CFTimeInterval = 0
-    private var emaFps: Double = 0
-    private var fpsTicksSincePublish = 0
 
     public init(source: any FrameProducing, cropStore: CropStore, outputAspect: Double) {
         self.source = source
@@ -71,7 +61,6 @@ public final class PreviewModel {
         loop?.cancel()
         loop = nil
         pulling = false
-        lastFrameTime = 0
     }
 
     private func run() async {
@@ -94,25 +83,6 @@ public final class PreviewModel {
         guard let box else { return }
         sourceImage = NSImage(cgImage: box.image,
                               size: NSSize(width: box.image.width, height: box.image.height))
-        recordFrameForFPS()
-    }
-
-    private func recordFrameForFPS() {
-        let now = CACurrentMediaTime()
-        if lastFrameTime > 0 {
-            let delta = now - lastFrameTime
-            if delta > 0 {
-                let instant = 1.0 / delta
-                emaFps = emaFps == 0 ? instant : emaFps * Self.fpsSmoothingFactor + instant * (1 - Self.fpsSmoothingFactor)
-            }
-        }
-        lastFrameTime = now
-        fpsTicksSincePublish += 1
-        if fpsTicksSincePublish >= Self.fpsPublishCadenceTicks {
-            fpsTicksSincePublish = 0
-            let rounded = (emaFps / Self.fpsPublishThreshold).rounded() * Self.fpsPublishThreshold
-            if abs(rounded - fps) >= Self.fpsPublishThreshold { fps = rounded }
-        }
     }
 
     private nonisolated static func demand(forAspect aspect: Double, longSide: Double) -> Demand {

@@ -78,11 +78,6 @@ struct PreviewModelTests {
         #expect(store.current == region)
     }
 
-    @Test func fpsStartsAtZero() {
-        let model = PreviewModel(source: RecordingProducer(), cropStore: CropStore(), outputAspect: 1)
-        #expect(model.fps == 0)
-    }
-
     @Test func rebuildClearsRenderedImages() async {
         let model = PreviewModel(source: RecordingProducer(), cropStore: CropStore(), outputAspect: 1)
         model.start()

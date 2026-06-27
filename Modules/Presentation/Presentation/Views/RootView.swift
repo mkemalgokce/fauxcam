@@ -45,21 +45,11 @@ public struct RootView: View {
         }
     }
 
-    /// The viewfinder framing controls (gesture surface, rotate, zoom badge) only exist for a framing
-    /// source with camera access — the tour skips their steps otherwise instead of stalling.
-    private var framingControlsVisible: Bool {
-        session.sourceKind.supportsFraming &&
-        !(session.sourceKind == .webcam && camera.status != .authorized)
-    }
-
     private var mainContent: some View {
         VStack(spacing: 12) {
             ViewfinderCard(session: session, camera: camera, preview: preview)
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
-
-            DeviceControlBar(session: session)
-                .padding(.horizontal, 16)
 
             sourcePicker
                 .padding(.horizontal, 16)
@@ -72,17 +62,16 @@ public struct RootView: View {
         .onAppear {
             reconfigurePreview()
             preview.start()
-            FauxCamTour.updateFramingControlsVisible(framingControlsVisible)
         }
         .onDisappear { preview.stop() }
-        .onChange(of: session.sourceKind) { _, _ in sourceChanged(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
+        .onChange(of: session.sourceKind) { _, _ in sourceChanged() }
         .onChange(of: session.imagePath) { _, _ in sourceChanged() }
         .onChange(of: session.videoPath) { _, _ in sourceChanged() }
         .onChange(of: session.qrText) { _, _ in sourceChanged() }
         .onChange(of: session.deviceAspect) { _, _ in deviceChanged() }
         .onChange(of: session.deviceLandscape) { _, _ in deviceChanged() }
         .onChange(of: session.region) { _, _ in preview.setCrop(session.region); session.setCrop(session.region) }
-        .onChange(of: camera.status) { _, _ in session.refreshWebcamIfActive(); preview.rebuild(); FauxCamTour.updateFramingControlsVisible(framingControlsVisible) }
+        .onChange(of: camera.status) { _, _ in session.refreshWebcamIfActive(); preview.rebuild() }
         .onChange(of: controlActiveState) { _, state in
             if state == .inactive { preview.stop() } else { preview.start(); reconfigurePreview() }
         }

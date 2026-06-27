@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import TipKit
 import Kernel
+import Simulators
 
 // MARK: - Viewfinder (renders frames only — source-agnostic)
 
@@ -34,8 +35,12 @@ struct ViewfinderCard: View {
     private static let gestureHintFadeDuration: Double = 0.25
     private static let firstFramePollSeconds: Double = 0.1
     private static let zoomStepFactor: Double = 1.2
-    private static let goodFramesPerSecond: Double = 20
-    private static let okFramesPerSecond: Double = 12
+    private static let simulatorMenuMaxWidth: CGFloat = 130
+    private static let orientationSpring = Animation.spring(response: 0.3, dampingFraction: 0.72)
+    private static let noSimulatorsLabel = "No simulators"
+    private static let phoneSymbol = "iphone.gen3"
+    private static let padSymbol = "ipad"
+    private static let padNameMarker = "ipad"
 
     private var needsCameraPermission: Bool {
         session.sourceKind == .webcam && camera.status != .authorized
@@ -92,13 +97,13 @@ struct ViewfinderCard: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            if preview.sourceImage != nil && !needsCameraPermission {
-                fpsBadge.padding(Self.overlayInset)
+            if !needsCameraPermission {
+                deviceControls.padding(Self.overlayInset)
             }
         }
         .overlay(alignment: .topTrailing) {
             if framingActive {
-                framingControls.padding(Self.overlayInset)
+                zoomBadge.padding(Self.overlayInset)
             }
         }
         .overlay(alignment: .bottom) {
@@ -112,13 +117,6 @@ struct ViewfinderCard: View {
     }
 
     private static let overlayInset: CGFloat = 10
-
-    private var framingControls: some View {
-        HStack(spacing: 8) {
-            rotateButton.popoverTip(RotateTip(), arrowEdge: .bottom)
-            zoomBadge
-        }
-    }
 
     /// Re-arms the gesture hint whenever the framing context changes (source switched or camera access
     /// granted/revoked), so it re-appears for each newly framable source.
@@ -176,30 +174,76 @@ struct ViewfinderCard: View {
         }
     }
 
-    private var fpsBadge: some View {
-        HStack(spacing: 4) {
-            Circle().fill(fpsTierColor)
-                .frame(width: 5, height: 5)
-            Text("\(preview.fps, format: .number.precision(.fractionLength(0))) fps")
-                .font(.caption2.monospacedDigit().weight(.semibold))
+    // MARK: Device controls (which simulator to mirror + its orientation)
+
+    private var deviceControls: some View {
+        HStack(spacing: 8) {
+            simulatorMenu.popoverTip(DeviceTip(), arrowEdge: .bottom)
+            orientationButton
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 8).padding(.vertical, 4)
+    }
+
+    private var hasDevices: Bool { !session.devices.isEmpty }
+
+    private var selectedDeviceName: String { session.selectedDevice?.name ?? Self.noSimulatorsLabel }
+
+    private var selectedDeviceSymbol: String {
+        session.selectedDevice.map { Self.symbol(forDeviceNamed: $0.name) } ?? Self.phoneSymbol
+    }
+
+    private static func symbol(forDeviceNamed name: String) -> String {
+        name.lowercased().contains(padNameMarker) ? padSymbol : phoneSymbol
+    }
+
+    private var simulatorMenu: some View {
+        Menu {
+            if hasDevices {
+                ForEach(session.devices) { device in
+                    Button { session.selectDevice(device.udid) } label: {
+                        Label(device.name,
+                              systemImage: device.udid == session.selectedUDID ? "checkmark" : Self.symbol(forDeviceNamed: device.name))
+                    }
+                }
+            } else {
+                Text(Self.noSimulatorsLabel)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: selectedDeviceSymbol).font(.caption2.weight(.semibold))
+                Text(selectedDeviceName)
+                    .font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                if hasDevices {
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .frame(maxWidth: Self.simulatorMenuMaxWidth, alignment: .leading)
+            .contentShape(.capsule)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .glassEffect(.regular, in: .capsule)
-        .help("Live preview frame rate")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Preview frame rate")
-        .accessibilityValue("\(Int(preview.fps.rounded())) fps, \(fpsTierLabel)")
+        .disabled(!hasDevices)
+        .help("Choose which booted simulator the viewfinder mirrors")
+        .accessibilityLabel("Simulator to mirror")
+        .accessibilityValue(selectedDeviceName)
     }
 
-    private var fpsTierColor: Color {
-        if preview.fps >= Self.goodFramesPerSecond { return .green }
-        return preview.fps >= Self.okFramesPerSecond ? .yellow : .orange
-    }
-
-    private var fpsTierLabel: String {
-        if preview.fps >= Self.goodFramesPerSecond { return "good" }
-        return preview.fps >= Self.okFramesPerSecond ? "ok" : "low"
+    private var orientationButton: some View {
+        Button {
+            withAnimation(reduceMotion ? nil : Self.orientationSpring) { session.toggleDeviceOrientation() }
+        } label: {
+            Image(systemName: session.deviceLandscape ? "rectangle.landscape.rotate" : "rectangle.portrait.rotate")
+                .font(.caption.weight(.semibold))
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .padding(7)
+        .glassEffect(.regular, in: .circle)
+        .disabled(!hasDevices)
+        .help("Rotate the selected device — portrait ⇄ landscape")
+        .accessibilityLabel(session.deviceLandscape ? "Switch device to portrait" : "Switch device to landscape")
     }
 
     /// Apple-native trackpad two-finger rotate. `value.rotation` is the ABSOLUTE angle since the gesture
@@ -258,27 +302,6 @@ struct ViewfinderCard: View {
         }
         rotationCommit = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
-    }
-
-    private var rotateButton: some View {
-        Button {
-            rotationCommit?.cancel(); zoomCommit?.cancel()
-            let snapped = snapToRightAngle(session.region.rotationRadians + .pi / 2)
-            session.region = CropRegion(centerX: session.region.centerX,
-                                        centerY: session.region.centerY,
-                                        zoom: currentZoom,
-                                        rotationRadians: snapped)
-            liveZoom = nil
-            if !reduceMotion { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
-        } label: {
-            Image(systemName: "rotate.right").font(.caption.weight(.semibold))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .padding(7)
-        .glassEffect(.regular, in: .circle)
-        .help("Rotate the image 90° — applies to the preview and every injected simulator")
-        .accessibilityLabel("Rotate image 90 degrees clockwise")
     }
 
     private var zoomBadge: some View {
