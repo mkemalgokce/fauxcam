@@ -5,9 +5,18 @@
 <h1 align="center">FauxCam</h1>
 
 <p align="center">
+  <a href="https://mkemalgokce.github.io/fauxcam"><img src="https://img.shields.io/badge/Website-fauxcam-FF5A1F?logo=safari&logoColor=white" alt="Website"></a>
   <a href="https://github.com/mkemalgokce/fauxcam/releases"><img src="https://img.shields.io/github/v/release/mkemalgokce/fauxcam" alt="Latest release"></a>
   <a href="https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml"><img src="https://github.com/mkemalgokce/fauxcam/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="https://mkemalgokce.github.io/fauxcam"><img src="docs/assets/demo.gif" alt="FauxCam feeding a source into the iOS Simulator" width="480"></a>
+</p>
+
+<p align="center">
+  <strong><a href="https://mkemalgokce.github.io/fauxcam">mkemalgokce.github.io/fauxcam</a></strong>
 </p>
 
 Feed a custom camera source — a still image, a video file, your Mac's webcam/Continuity Camera, or a QR code — into apps running in the **iOS Simulator**, where Apple provides no camera.
@@ -17,6 +26,15 @@ Feed a custom camera source — a still image, a video file, your Mac's webcam/C
 The iOS Simulator has no camera. Any app that opens `AVCaptureSession` gets nothing, so camera flows — scanning a QR code, capturing a photo, showing a live preview — can't be exercised without a physical device.
 
 FauxCam fills that gap. It is a macOS menu-bar app (**FauxCamApp**) and a companion command-line tool (**`faux`**) that inject a small Objective-C dynamic library (`libFaux.dylib`) into a simulated app at launch, swizzle AVFoundation so the app discovers a fake front/back camera, and stream BGRA frames into it from the host. Nothing is installed inside the app or the device; when you stop, nothing is left behind.
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center"><img src="docs/assets/shot-app.png" alt="FauxCam menu-bar viewfinder panel mirroring a simulator" width="380"><br><sub>Menu-bar viewfinder — WYSIWYG</sub></td>
+    <td align="center"><img src="docs/assets/shot-qr.png" alt="A QR code mirrored into an iPad simulator scanning it" width="380"><br><sub>A QR source mirrored into a Simulator</sub></td>
+  </tr>
+</table>
+</div>
 
 ## Requirements
 
